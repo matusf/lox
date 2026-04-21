@@ -134,6 +134,20 @@ impl<'a> Tokenizer<'a> {
             line: 1,
         }
     }
+
+    fn consume_while(&mut self, predicate: fn(char) -> bool) {
+        while let Some(c) = self.chars.peek()
+            && predicate(*c)
+        {
+            self.advance();
+        }
+    }
+
+    fn advance(&mut self) -> Option<char> {
+        let c = self.chars.next()?;
+        self.current += c.len_utf8();
+        Some(c)
+    }
 }
 
 #[derive(Debug)]
@@ -151,9 +165,7 @@ impl<'a> Iterator for Tokenizer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let lexeme_start = self.current;
-
-            let current_char = self.chars.next()?;
-            self.current += current_char.len_utf8();
+            let current_char = self.advance()?;
 
             let single_char_token = |typ| -> Option<Result<Token<'a>, Error>> {
                 Some(Ok(Token {
@@ -203,19 +215,13 @@ impl<'a> Iterator for Tokenizer<'a> {
             match started {
                 Started::IfEqualElse(yes, no) => {
                     if self.chars.peek() == Some(&'=') {
-                        let c = self.chars.next()?;
-                        self.current += c.len_utf8();
+                        self.advance();
                         return multi_char_token(yes, self.current);
                     }
                     return single_char_token(no);
                 }
                 Started::Identifier => {
-                    while let Some(c) = self.chars.peek()
-                        && matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_')
-                    {
-                        self.current += c.len_utf8();
-                        self.chars.next();
-                    }
+                    self.consume_while(|c| matches!(c, 'a'..='z' | 'A'..='Z' | '0'..='9' | '_'));
                     return match &self.source[lexeme_start..self.current] {
                         "and" => multi_char_token(TokenType::And, self.current),
                         "class" => multi_char_token(TokenType::Class, self.current),
@@ -252,12 +258,8 @@ impl<'a> Iterator for Tokenizer<'a> {
                     return multi_char_token(TokenType::String, self.current);
                 }
                 Started::Number => {
-                    while let Some(c) = self.chars.peek()
-                        && c.is_ascii_digit()
-                    {
-                        self.current += c.len_utf8();
-                        self.chars.next();
-                    }
+                    self.consume_while(|c| c.is_ascii_digit());
+
                     if self.chars.peek() == Some(&'.') {
                         // Construct new peekable iterator to look 2 ahead
                         let mut p = self.source[self.current..].chars().peekable();
@@ -268,15 +270,8 @@ impl<'a> Iterator for Tokenizer<'a> {
                             && c.is_ascii_digit()
                         {
                             // Move pass the dot in chars
-                            let dot = self.chars.next()?;
-                            self.current += dot.len_utf8();
-
-                            while let Some(c) = self.chars.peek()
-                                && c.is_ascii_digit()
-                            {
-                                self.current += c.len_utf8();
-                                self.chars.next();
-                            }
+                            self.advance();
+                            self.consume_while(|c| c.is_ascii_digit());
                         }
                     }
                     return multi_char_token(TokenType::Number, self.current);
@@ -284,13 +279,9 @@ impl<'a> Iterator for Tokenizer<'a> {
                 Started::Slash => {
                     // Comment tokenization
                     if self.chars.peek() == Some(&'/') {
-                        while let Some(c) = self.chars.next()
-                            && c != '\n'
-                        {
-                            self.current += c.len_utf8();
-                        }
+                        self.consume_while(|c| c != '\n');
                         // Move pass the end line
-                        self.current += 1;
+                        self.advance();
                         self.line += 1;
                     } else {
                         return single_char_token(TokenType::Slash);
