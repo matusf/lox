@@ -1,6 +1,7 @@
 use std::io;
 use thiserror::Error;
 
+pub mod interpreter;
 pub mod parser;
 pub mod tokenizer;
 
@@ -12,4 +13,6 @@ pub enum LoxError {
     TokenizerError(#[from] tokenizer::Error),
     #[error("Failed to parse")]
     ParserError(#[from] parser::Error),
+    #[error("Runtime error")]
+    RuntimeError(#[from] interpreter::Error),
 }

@@ -5,9 +5,11 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 #[error("Parser error")]
-pub struct Error {
-    // line: usize,
-    message: String,
+pub enum Error {
+    #[error("[line {line}] Error: Unexpected token: {lexeme}")]
+    UnexpectedToken { line: usize, lexeme: String },
+    #[error("Error: Unexpected end of file.")]
+    UnexpectedEof,
 }
 
 #[derive(Debug)]
@@ -107,14 +109,14 @@ impl<'a> From<Token<'a>> for BinOp {
 
 #[derive(Debug)]
 pub enum UnaryOp {
-    Bang,
+    Negate,
     Minus,
 }
 
 impl Display for UnaryOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnaryOp::Bang => write!(f, "!"),
+            UnaryOp::Negate => write!(f, "!"),
             UnaryOp::Minus => write!(f, "-"),
         }
     }
@@ -123,7 +125,7 @@ impl Display for UnaryOp {
 impl<'a> From<Token<'a>> for UnaryOp {
     fn from(token: Token<'a>) -> Self {
         match token.typ {
-            TokenType::Bang => UnaryOp::Bang,
+            TokenType::Bang => UnaryOp::Negate,
             TokenType::Minus => UnaryOp::Minus,
             _ => unreachable!(),
         }
@@ -150,14 +152,14 @@ impl<'a> Display for Expr<'a> {
 }
 
 pub struct Parser<'a> {
-    source: &'a str,
+    _source: &'a str,
     tokens: Peekable<vec::IntoIter<Token<'a>>>,
 }
 
 impl<'a> Parser<'a> {
     pub fn new(source: &'a str, tokens: Vec<Token<'a>>) -> Self {
         Self {
-            source,
+            _source: source,
             tokens: tokens.into_iter().peekable(),
         }
     }
@@ -256,9 +258,7 @@ impl<'a> Parser<'a> {
 
     // primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
     fn parse_primary(&mut self) -> Result<Expr<'a>, Error> {
-        let token = self.tokens.next().ok_or(Error {
-            message: "No primary".to_string(),
-        })?;
+        let token = self.tokens.next().ok_or(Error::UnexpectedEof)?;
 
         match token.typ {
             TokenType::LeftParen => {
@@ -272,8 +272,9 @@ impl<'a> Parser<'a> {
             | TokenType::Nil
             | TokenType::False
             | TokenType::True => Ok(Expr::Literal(token.into())),
-            _ => Err(Error {
-                message: "Unexpexted token in primary".to_string(),
+            _ => Err(Error::UnexpectedToken {
+                line: token.line,
+                lexeme: token.lexeme.to_string(),
             }),
         }
     }
@@ -288,12 +289,11 @@ impl<'a> Parser<'a> {
     fn expect_match(&mut self, predicate: impl Fn(TokenType) -> bool) -> Result<Token<'a>, Error> {
         match self.tokens.next() {
             Some(t) if predicate(t.typ) => Ok(t),
-            Some(t) => Err(Error {
-                message: format!("Unexpected token {:?}", t.lexeme),
+            Some(t) => Err(Error::UnexpectedToken {
+                line: t.line,
+                lexeme: t.lexeme.to_string(),
             }),
-            None => Err(Error {
-                message: "Unexpected eof".to_string(),
-            }),
+            None => Err(Error::UnexpectedEof),
         }
     }
 

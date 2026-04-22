@@ -3,7 +3,7 @@ use std::{fs, process};
 
 use clap::{Parser, Subcommand};
 use lox::{
-    LoxError, parser,
+    LoxError, interpreter, parser,
     tokenizer::{Token, Tokenizer},
 };
 
@@ -17,6 +17,7 @@ struct Cli {
 enum Commands {
     Tokenize { filename: PathBuf },
     Parse { filename: PathBuf },
+    Evaluate { filename: PathBuf },
 }
 
 fn main() -> Result<(), LoxError> {
@@ -52,6 +53,18 @@ fn main() -> Result<(), LoxError> {
                     is_err = true;
                 }
             }
+        }
+        Commands::Evaluate { filename } => {
+            let source = fs::read_to_string(filename)?;
+            let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
+            let expr = parser::Parser::new(&source, tokens?).parse()?;
+            match interpreter::eval(expr) {
+                Ok(value) => println!("{value}"),
+                Err(err) => {
+                    eprintln!("{err}");
+                    process::exit(70)
+                }
+            };
         }
     };
 
