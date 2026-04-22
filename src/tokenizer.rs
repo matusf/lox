@@ -11,12 +11,13 @@ pub struct Tokenizer<'a> {
 
 #[derive(Debug)]
 pub struct Token<'a> {
-    lexeme: &'a str,
-    typ: TokenType,
+    pub lexeme: &'a str,
+    pub typ: TokenType,
+    pub line: usize,
 }
 
-#[derive(Debug)]
-enum TokenType {
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TokenType {
     LeftParen,
     RightParen,
     LeftBrace,
@@ -89,9 +90,9 @@ impl Display for Token<'_> {
             TokenType::Identifier => write!(f, "IDENTIFIER {lexeme} null"),
             TokenType::String => write!(f, "STRING {lexeme} {}", lexeme.trim_matches('"')),
             TokenType::Number => {
-                let n = lexeme.parse::<f64>().expect("parse num");
-                if n.trunc() == n {
-                    write!(f, "NUMBER {lexeme} {n}.0")
+                let num: f64 = lexeme.parse().expect("parse num");
+                if num.trunc() == num {
+                    write!(f, "NUMBER {lexeme} {num}.0")
                 } else {
                     write!(f, "NUMBER {lexeme} {lexeme}",)
                 }
@@ -165,12 +166,14 @@ impl<'a> Iterator for Tokenizer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let lexeme_start = self.current;
+            let line = self.line;
             let current_char = self.advance()?;
 
             let single_char_token = |typ| -> Option<Result<Token<'a>, Error>> {
                 Some(Ok(Token {
                     typ,
                     lexeme: &self.source[lexeme_start..self.current],
+                    line,
                 }))
             };
 
@@ -178,6 +181,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 Some(Ok(Token {
                     typ,
                     lexeme: &self.source[lexeme_start..lexeme_end],
+                    line,
                 }))
             };
             let started = match current_char {
