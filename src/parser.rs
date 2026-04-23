@@ -8,8 +8,10 @@ use thiserror::Error;
 pub enum Error {
     #[error("[line {line}] Error: Unexpected token: {lexeme}")]
     UnexpectedToken { line: usize, lexeme: String },
-    #[error("Error: Unexpected end of file.")]
+    #[error("Unexpected end of file.")]
     UnexpectedEof,
+    #[error("Unvalid assignment to: {expr}")]
+    InvalidAssignment { expr: String },
 }
 
 #[derive(Debug)]
@@ -138,6 +140,7 @@ pub enum Expr<'a> {
     Group(Box<Expr<'a>>),
     BinOp(BinOp, Box<Expr<'a>>, Box<Expr<'a>>),
     UnaryOp(UnaryOp, Box<Expr<'a>>),
+    Assign(&'a str, Box<Expr<'a>>),
 }
 
 impl<'a> Display for Expr<'a> {
@@ -147,6 +150,7 @@ impl<'a> Display for Expr<'a> {
             Expr::Group(expr) => write!(f, "(group {expr})"),
             Expr::BinOp(bin_op, lhs, rhs) => write!(f, "({bin_op} {lhs} {rhs})"),
             Expr::UnaryOp(unary_op, expr) => write!(f, "({unary_op} {expr})"),
+            Expr::Assign(ident, expr) => write!(f, "(= {ident} {expr})"),
         }
     }
 }
@@ -156,6 +160,7 @@ pub enum Statement<'a> {
     Expr(Expr<'a>),
     Print(Expr<'a>),
     VarDecl(&'a str, Option<Expr<'a>>),
+    Block(Vec<Statement<'a>>),
 }
 
 impl<'a> Display for Statement<'a> {
@@ -165,6 +170,13 @@ impl<'a> Display for Statement<'a> {
             Statement::Print(expr) => write!(f, "(print {expr})"),
             Statement::VarDecl(name, Some(expr)) => write!(f, "(var {name} {expr})"),
             Statement::VarDecl(name, None) => write!(f, "(var {name})"),
+            Statement::Block(statements) => {
+                write!(f, "(block")?;
+                for statement in statements {
+                    write!(f, " {statement}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -218,10 +230,12 @@ impl<'a> Parser<'a> {
         Ok(Statement::VarDecl(ident, expr))
     }
 
-    // statement → exprStmt | printStmt ;
+    // statement → exprStmt | printStmt | block ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
         if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
+        } else if self.peek_eq(TokenType::LeftBrace) {
+            self.parse_block()
         } else {
             self.parse_expr_statement()
         }
@@ -242,9 +256,40 @@ impl<'a> Parser<'a> {
         Ok(Statement::Print(expr))
     }
 
-    // expression → equality ;
+    // block → "{" declaration* "}" ;
+    fn parse_block(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::LeftBrace)?;
+
+        let mut block = Vec::new();
+        while !self.peek_eq(TokenType::RightBrace) {
+            block.push(self.parse_declaration()?);
+        }
+
+        self.expect(TokenType::RightBrace)?;
+        Ok(Statement::Block(block))
+    }
+
+    // expression → assignment ;
     pub fn parse_expression(&mut self) -> Result<Expr<'a>, Error> {
-        self.parse_equality()
+        self.parse_assignment()
+    }
+
+    // assignment → IDENTIFIER "=" assignment | equality ;
+    fn parse_assignment(&mut self) -> Result<Expr<'a>, Error> {
+        let expr = self.parse_equality()?;
+        if self.parse_if_eq(TokenType::Equal).is_some() {
+            let rhs = self.parse_assignment()?;
+            if let Expr::Literal(Literal::Identifier(name)) = expr {
+                Ok(Expr::Assign(name, Box::new(rhs)))
+            } else {
+                Err(Error::InvalidAssignment {
+                    expr: expr.to_string(),
+                })
+            }
+        } else {
+            // Parsed equality
+            Ok(expr)
+        }
     }
 
     // equality → comparison ( ( "!=" | "==" ) comparison )* ;
@@ -330,10 +375,6 @@ impl<'a> Parser<'a> {
                 lexeme: token.lexeme.to_string(),
             }),
         }
-    }
-
-    fn peek_match(&mut self, predicate: fn(TokenType) -> bool) -> bool {
-        self.tokens.peek().is_some_and(|token| predicate(token.typ))
     }
 
     fn peek_eq(&mut self, token_type: TokenType) -> bool {
