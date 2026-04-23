@@ -1,18 +1,18 @@
-use std::{borrow::Cow, cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
 use thiserror::Error;
 
 use crate::parser::{BinOp, Expr, Literal, Statement, UnaryOp};
 
 #[derive(Debug, Clone)]
-pub enum Value<'a> {
+pub enum Value {
     Number(f64),
-    String(Cow<'a, str>),
+    String(Rc<str>),
     Bool(bool),
     Nil,
 }
 
-impl Display for Value<'_> {
+impl Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Number(n) => write!(f, "{n}"),
@@ -42,7 +42,7 @@ pub enum Error {
 
 #[derive(Debug, Default, Clone)]
 pub struct Environment<'a> {
-    values: Rc<RefCell<HashMap<&'a str, Value<'a>>>>,
+    values: Rc<RefCell<HashMap<&'a str, Value>>>,
     enclosing: Option<Box<Environment<'a>>>,
 }
 
@@ -54,11 +54,11 @@ impl<'a> Environment<'a> {
         }
     }
 
-    fn define(&self, name: &'a str, value: Value<'a>) {
+    fn define(&self, name: &'a str, value: Value) {
         self.values.borrow_mut().insert(name, value);
     }
 
-    fn assign(&self, name: &'a str, value: Value<'a>) -> Result<(), Error> {
+    fn assign(&self, name: &'a str, value: Value) -> Result<(), Error> {
         if !self.values.borrow().contains_key(name) {
             return self.enclosing.as_ref().map_or(
                 Err(Error::UndefinedVariable {
@@ -70,11 +70,10 @@ impl<'a> Environment<'a> {
         self.values.borrow_mut().insert(name, value);
         Ok(())
     }
-    fn get(&self, name: &str) -> Result<Value<'a>, Error> {
+    fn get(&self, name: &str) -> Result<Value, Error> {
         match self.values.borrow().get(name) {
-            // NOTE: This is not correct nor efficient e.g. a[1] = 10
-            // Lox does not have arrays but it's not ok to copy on lookup
-            // Maybe put it behind Rc?
+            // NOTE: This clone should be relatively cheap as string is
+            // behind Rc and other fields are small
             Some(value) => Ok(value.clone()),
             None => self.enclosing.as_ref().map_or(
                 Err(Error::UndefinedVariable {
@@ -112,13 +111,13 @@ pub fn execute<'a>(
     Ok(())
 }
 
-pub fn eval<'a>(expr: Expr<'a>, env: &mut Environment<'a>) -> Result<Value<'a>, Error> {
+pub fn eval<'a>(expr: Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Error> {
     let value = match expr {
         Expr::Literal(literal) => match literal {
             Literal::Bool(b) => Value::Bool(b),
             Literal::Nil => Value::Nil,
             Literal::Number(n) => Value::Number(n),
-            Literal::String(s) => Value::String(Cow::Borrowed(s.trim_matches('"'))),
+            Literal::String(s) => Value::String(Rc::from(s.trim_matches('"'))),
             Literal::Identifier(name) => env.get(name)?,
         },
         Expr::Group(expr) => eval(*expr, env)?,
@@ -138,7 +137,7 @@ fn eval_unary_op<'a>(
     unary_op: UnaryOp,
     expr: Expr<'a>,
     env: &mut Environment<'a>,
-) -> Result<Value<'a>, Error> {
+) -> Result<Value, Error> {
     let value = eval(expr, env)?;
     match (&unary_op, &value) {
         (UnaryOp::Negate, Value::Bool(b)) => Ok(Value::Bool(!b)),
@@ -157,7 +156,7 @@ fn eval_bin_op<'a>(
     lhs: Expr<'a>,
     rhs: Expr<'a>,
     env: &mut Environment<'a>,
-) -> Result<Value<'a>, Error> {
+) -> Result<Value, Error> {
     use BinOp::{
         Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
     };
@@ -183,8 +182,10 @@ fn eval_bin_op<'a>(
         (Sub, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
         (Add, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
         (Add, Value::String(lhs), Value::String(rhs)) => {
-            // TODO: Can reuse allocation if lhs is already owned
-            Ok(Value::String(Cow::Owned(lhs.into_owned() + &rhs)))
+            let mut s = String::with_capacity(lhs.len() + rhs.len());
+            s.push_str(&lhs);
+            s.push_str(&rhs);
+            Ok(Value::String(Rc::from(s)))
         }
         (Mul, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
         (Div, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
