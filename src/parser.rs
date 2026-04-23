@@ -23,10 +23,10 @@ pub enum Literal<'a> {
     Identifier(&'a str),
 }
 
-impl<'a> Display for Literal<'a> {
+impl Display for Literal<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Literal::Bool(b) => write!(f, "{:?}", b),
+            Literal::Bool(b) => write!(f, "{b:?}"),
             Literal::Nil => write!(f, "nil"),
             Literal::Number(num) => {
                 if num.trunc() == *num {
@@ -75,16 +75,16 @@ pub enum BinOp {
 impl Display for BinOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            BinOp::BangEqual => write!(f, "!="),
-            BinOp::EqualEqual => write!(f, "=="),
-            BinOp::Greater => write!(f, ">"),
-            BinOp::GreaterEqual => write!(f, ">="),
-            BinOp::Less => write!(f, "<"),
-            BinOp::LessEqual => write!(f, "<="),
-            BinOp::Sub => write!(f, "-"),
-            BinOp::Add => write!(f, "+"),
-            BinOp::Mul => write!(f, "*"),
-            BinOp::Div => write!(f, "/"),
+            Self::BangEqual => write!(f, "!="),
+            Self::EqualEqual => write!(f, "=="),
+            Self::Greater => write!(f, ">"),
+            Self::GreaterEqual => write!(f, ">="),
+            Self::Less => write!(f, "<"),
+            Self::LessEqual => write!(f, "<="),
+            Self::Sub => write!(f, "-"),
+            Self::Add => write!(f, "+"),
+            Self::Mul => write!(f, "*"),
+            Self::Div => write!(f, "/"),
         }
     }
 }
@@ -118,8 +118,8 @@ pub enum UnaryOp {
 impl Display for UnaryOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UnaryOp::Negate => write!(f, "!"),
-            UnaryOp::Minus => write!(f, "-"),
+            Self::Negate => write!(f, "!"),
+            Self::Minus => write!(f, "-"),
         }
     }
 }
@@ -127,8 +127,8 @@ impl Display for UnaryOp {
 impl<'a> From<Token<'a>> for UnaryOp {
     fn from(token: Token<'a>) -> Self {
         match token.typ {
-            TokenType::Bang => UnaryOp::Negate,
-            TokenType::Minus => UnaryOp::Minus,
+            TokenType::Bang => Self::Negate,
+            TokenType::Minus => Self::Minus,
             _ => unreachable!(),
         }
     }
@@ -143,7 +143,7 @@ pub enum Expr<'a> {
     Assign(&'a str, Box<Expr<'a>>),
 }
 
-impl<'a> Display for Expr<'a> {
+impl Display for Expr<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expr::Literal(literal) => write!(f, "{literal}"),
@@ -163,7 +163,7 @@ pub enum Statement<'a> {
     Block(Vec<Statement<'a>>),
 }
 
-impl<'a> Display for Statement<'a> {
+impl Display for Statement<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Statement::Expr(expr) => write!(f, "(; {expr})"),
@@ -197,6 +197,7 @@ impl<'a> Iterator for Parser<'a> {
 }
 
 impl<'a> Parser<'a> {
+    #[must_use]
     pub fn new(source: &'a str, tokens: Vec<Token<'a>>) -> Self {
         Self {
             _source: source,
@@ -318,7 +319,7 @@ impl<'a> Parser<'a> {
                     | TokenType::LessEqual
             )
         }) {
-            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(self.parse_term()?))
+            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(self.parse_term()?));
         }
 
         Ok(expr)

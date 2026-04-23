@@ -71,7 +71,7 @@ fn main() -> Result<(), LoxError> {
             match parser::Parser::new(&source, tokens?).parse_expression() {
                 Ok(expr) => println!("{expr}"),
                 Err(error) => {
-                    eprintln!("{:?}", error);
+                    eprintln!("{error:?}");
                     process::exit(65);
                 }
             }
@@ -86,7 +86,7 @@ fn main() -> Result<(), LoxError> {
                     eprintln!("{err}");
                     process::exit(70);
                 }
-            };
+            }
         }
         Commands::Run {
             filename,
@@ -115,13 +115,13 @@ fn main() -> Result<(), LoxError> {
             }
 
             match interpreter::execute(program.into_iter(), &mut Environment::default()) {
-                Ok(_) => (),
+                Ok(()) => (),
                 Err(error) => {
                     eprintln!("{error}");
                     process::exit(70);
                 }
-            };
+            }
         }
-    };
+    }
     Ok(())
 }

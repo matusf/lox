@@ -12,7 +12,7 @@ pub enum Value<'a> {
     Nil,
 }
 
-impl<'a> Display for Value<'a> {
+impl Display for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Number(n) => write!(f, "{n}"),
@@ -47,9 +47,9 @@ pub struct Environment<'a> {
 }
 
 impl<'a> Environment<'a> {
-    fn from_enclosing(enclosing: Environment<'a>) -> Self {
+    fn from_enclosing(enclosing: Self) -> Self {
         Self {
-            values: Default::default(),
+            values: Rc::default(),
             enclosing: Some(Box::new(enclosing)),
         }
     }
@@ -60,13 +60,12 @@ impl<'a> Environment<'a> {
 
     fn assign(&self, name: &'a str, value: Value<'a>) -> Result<(), Error> {
         if !self.values.borrow().contains_key(name) {
-            return if let Some(env) = &self.enclosing {
-                env.assign(name, value)
-            } else {
+            return self.enclosing.as_ref().map_or(
                 Err(Error::UndefinedVariable {
                     name: name.to_string(),
-                })
-            };
+                }),
+                |env| env.assign(name, value),
+            );
         }
         self.values.borrow_mut().insert(name, value);
         Ok(())
@@ -77,12 +76,12 @@ impl<'a> Environment<'a> {
             // Lox does not have arrays but it's not ok to copy on lookup
             // Maybe put it behind Rc?
             Some(value) => Ok(value.clone()),
-            None => match &self.enclosing {
-                Some(env) => env.get(name),
-                None => Err(Error::UndefinedVariable {
+            None => self.enclosing.as_ref().map_or(
+                Err(Error::UndefinedVariable {
                     name: name.to_string(),
                 }),
-            },
+                |env| env.get(name),
+            ),
         }
     }
 }
@@ -102,13 +101,13 @@ pub fn execute<'a>(
             Statement::VarDecl(name, None) => env.define(name, Value::Nil),
             Statement::VarDecl(name, Some(expr)) => {
                 let value = eval(expr, env)?;
-                env.define(name, value)
+                env.define(name, value);
             }
             Statement::Block(statements) => {
                 let mut env = Environment::from_enclosing(env.clone());
                 execute(statements.into_iter(), &mut env)?;
             }
-        };
+        }
     }
     Ok(())
 }
@@ -159,9 +158,11 @@ fn eval_bin_op<'a>(
     rhs: Expr<'a>,
     env: &mut Environment<'a>,
 ) -> Result<Value<'a>, Error> {
+    use BinOp::{
+        Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
+    };
     let lhs = eval(lhs, env)?;
     let rhs = eval(rhs, env)?;
-    use BinOp::*;
     match (bin_op, lhs, rhs) {
         (BangEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs != rhs)),
         (BangEqual, Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs != rhs)),

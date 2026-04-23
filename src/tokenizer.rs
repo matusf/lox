@@ -127,7 +127,7 @@ pub enum Error {
 }
 
 impl<'a> Tokenizer<'a> {
-    pub fn new(source: &'a str) -> Self {
+    #[must_use] pub fn new(source: &'a str) -> Self {
         Self {
             source,
             chars: source.chars().peekable(),
