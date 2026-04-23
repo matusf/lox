@@ -212,12 +212,11 @@ impl<'a> Parser<'a> {
     fn parse_equality(&mut self) -> Result<Expr<'a>, Error> {
         let mut expr = self.parse_comparison()?;
 
-        while self.peek_match(|t| matches!(t, TokenType::BangEqual | TokenType::EqualEqual)) {
-            let op = self
-                .expect_match(|t| matches!(t, TokenType::BangEqual | TokenType::EqualEqual))?
-                .into();
+        while let Some(op) =
+            self.parse_if(|t| matches!(t, TokenType::BangEqual | TokenType::EqualEqual))
+        {
             let rhs = self.parse_comparison()?;
-            expr = Expr::BinOp(op, Box::new(expr), Box::new(rhs));
+            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(rhs));
         }
 
         Ok(expr)
@@ -226,7 +225,7 @@ impl<'a> Parser<'a> {
     // comparison → term ( ( ">" | ">=" | "<" | "<=" ) term )* ;
     fn parse_comparison(&mut self) -> Result<Expr<'a>, Error> {
         let mut expr = self.parse_term()?;
-        while self.peek_match(|t| {
+        while let Some(op) = self.parse_if(|t| {
             matches!(
                 t,
                 TokenType::Greater
@@ -235,18 +234,7 @@ impl<'a> Parser<'a> {
                     | TokenType::LessEqual
             )
         }) {
-            let op = self
-                .expect_match(|t| {
-                    matches!(
-                        t,
-                        TokenType::Greater
-                            | TokenType::GreaterEqual
-                            | TokenType::Less
-                            | TokenType::LessEqual
-                    )
-                })?
-                .into();
-            expr = Expr::BinOp(op, Box::new(expr), Box::new(self.parse_term()?))
+            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(self.parse_term()?))
         }
 
         Ok(expr)
@@ -256,11 +244,8 @@ impl<'a> Parser<'a> {
     fn parse_term(&mut self) -> Result<Expr<'a>, Error> {
         let mut expr = self.parse_factor()?;
 
-        while self.peek_match(|t| matches!(t, TokenType::Minus | TokenType::Plus)) {
-            let op = self
-                .expect_match(|t| matches!(t, TokenType::Minus | TokenType::Plus))?
-                .into();
-            expr = Expr::BinOp(op, Box::new(expr), Box::new(self.parse_factor()?));
+        while let Some(op) = self.parse_if(|t| matches!(t, TokenType::Minus | TokenType::Plus)) {
+            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(self.parse_factor()?));
         }
 
         Ok(expr)
@@ -270,11 +255,8 @@ impl<'a> Parser<'a> {
     fn parse_factor(&mut self) -> Result<Expr<'a>, Error> {
         let mut expr = self.parse_unary()?;
 
-        while self.peek_match(|t| matches!(t, TokenType::Slash | TokenType::Star)) {
-            let op = self
-                .expect_match(|t| matches!(t, TokenType::Slash | TokenType::Star))?
-                .into();
-            expr = Expr::BinOp(op, Box::new(expr), Box::new(self.parse_unary()?));
+        while let Some(op) = self.parse_if(|t| matches!(t, TokenType::Slash | TokenType::Star)) {
+            expr = Expr::BinOp(op.into(), Box::new(expr), Box::new(self.parse_unary()?));
         }
 
         Ok(expr)
@@ -282,11 +264,8 @@ impl<'a> Parser<'a> {
 
     // unary → ( "!" | "-" ) unary | primary ;
     fn parse_unary(&mut self) -> Result<Expr<'a>, Error> {
-        if self.peek_match(|t| matches!(t, TokenType::Bang | TokenType::Minus)) {
-            let op = self
-                .expect_match(|t| matches!(t, TokenType::Bang | TokenType::Minus))?
-                .into();
-            return Ok(Expr::UnaryOp(op, Box::new(self.parse_unary()?)));
+        if let Some(op) = self.parse_if(|t| matches!(t, TokenType::Bang | TokenType::Minus)) {
+            return Ok(Expr::UnaryOp(op.into(), Box::new(self.parse_unary()?)));
         }
         self.parse_primary()
     }
@@ -319,6 +298,10 @@ impl<'a> Parser<'a> {
             .peek()
             .map(|token| predicate(token.typ))
             .unwrap_or_default()
+    }
+
+    fn parse_if(&mut self, predicate: impl Fn(TokenType) -> bool) -> Option<Token<'a>> {
+        self.tokens.next_if(|t| predicate(t.typ))
     }
 
     fn expect_match(&mut self, predicate: impl Fn(TokenType) -> bool) -> Result<Token<'a>, Error> {
