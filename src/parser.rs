@@ -151,9 +151,24 @@ impl<'a> Display for Expr<'a> {
     }
 }
 
+pub enum Statement<'a> {
+    Expr(Expr<'a>),
+    Print(Expr<'a>),
+}
+
 pub struct Parser<'a> {
     _source: &'a str,
     tokens: Peekable<vec::IntoIter<Token<'a>>>,
+}
+
+impl<'a> Iterator for Parser<'a> {
+    type Item = Result<Statement<'a>, Error>;
+
+    // program → statement* EOF ;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.tokens.peek()?;
+        Some(self.parse_statement())
+    }
 }
 
 impl<'a> Parser<'a> {
@@ -164,12 +179,32 @@ impl<'a> Parser<'a> {
         }
     }
 
-    pub fn parse(&mut self) -> Result<Expr<'a>, Error> {
-        self.parse_expression()
+    // statement → exprStmt | printStmt ;
+    fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
+        if self.peek_match(|t| t == TokenType::Print) {
+            self.parse_print_statement()
+        } else {
+            self.parse_expr_statement()
+        }
+    }
+
+    // exprStmt → expression ";" ;
+    fn parse_expr_statement(&mut self) -> Result<Statement<'a>, Error> {
+        let expr = self.parse_expression()?;
+        self.expect(TokenType::Semicolon)?;
+        Ok(Statement::Expr(expr))
+    }
+
+    // printStmt → "print" expression ";" ;
+    fn parse_print_statement(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::Print)?;
+        let expr = self.parse_expression()?;
+        self.expect(TokenType::Semicolon)?;
+        Ok(Statement::Print(expr))
     }
 
     // expression → equality ;
-    fn parse_expression(&mut self) -> Result<Expr<'a>, Error> {
+    pub fn parse_expression(&mut self) -> Result<Expr<'a>, Error> {
         self.parse_equality()
     }
 

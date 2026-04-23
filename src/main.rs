@@ -23,53 +23,58 @@ enum Commands {
 fn main() -> Result<(), LoxError> {
     let cli = Cli::parse();
 
-    let mut is_err = false;
     match cli.command {
         Commands::Tokenize { filename } => {
             let source = fs::read_to_string(&filename)?;
-            for token in Tokenizer::new(&source) {
-                match token {
-                    Ok(token) => println!("{token}"),
-                    Err(e) => {
-                        eprintln!("{e}");
-                        is_err = true;
-                    }
-                }
+            let (tokens, errors): (Vec<_>, Vec<_>) =
+                Tokenizer::new(&source).partition(Result::is_ok);
+
+            for token in tokens.into_iter().map(Result::unwrap) {
+                println!("{token}");
             }
+
+            let mut is_err = false;
+            if !errors.is_empty() {
+                is_err = true;
+            }
+
+            for error in errors.into_iter().map(Result::unwrap_err) {
+                eprintln!("{error}");
+            }
+
             println!("EOF  null");
+            if is_err {
+                process::exit(65);
+            }
         }
         Commands::Parse { filename } => {
             let source = fs::read_to_string(&filename)?;
-            let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
-            // TODO: this reports only first tokenization error
-            let tokens = match tokens {
-                Ok(ts) => ts,
-                Err(_) => process::exit(65),
-            };
-            match parser::Parser::new(&source, tokens).parse() {
+            let tokens: Result<Vec<_>, _> = Tokenizer::new(&source).collect();
+
+            if tokens.is_err() {
+                process::exit(65);
+            }
+
+            match parser::Parser::new(&source, tokens?).parse_expression() {
                 Ok(expr) => println!("{expr}"),
-                Err(e) => {
-                    eprintln!("{:?}", e);
-                    is_err = true;
+                Err(error) => {
+                    eprintln!("{:?}", error);
+                    process::exit(65);
                 }
             }
         }
         Commands::Evaluate { filename } => {
             let source = fs::read_to_string(filename)?;
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
-            let expr = parser::Parser::new(&source, tokens?).parse()?;
+            let expr = parser::Parser::new(&source, tokens?).parse_expression()?;
             match interpreter::eval(expr) {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
-                    process::exit(70)
+                    process::exit(70);
                 }
             };
         }
     };
-
-    if is_err {
-        process::exit(65);
-    }
     Ok(())
 }
