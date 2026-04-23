@@ -151,9 +151,22 @@ impl<'a> Display for Expr<'a> {
     }
 }
 
+#[derive(Debug)]
 pub enum Statement<'a> {
     Expr(Expr<'a>),
     Print(Expr<'a>),
+    VarDecl(&'a str, Option<Expr<'a>>),
+}
+
+impl<'a> Display for Statement<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Statement::Expr(expr) => write!(f, "(; {expr})"),
+            Statement::Print(expr) => write!(f, "(print {expr})"),
+            Statement::VarDecl(name, Some(expr)) => write!(f, "(var {name} {expr})"),
+            Statement::VarDecl(name, None) => write!(f, "(var {name})"),
+        }
+    }
 }
 
 pub struct Parser<'a> {

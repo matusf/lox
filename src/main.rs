@@ -15,10 +15,20 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    Tokenize { filename: PathBuf },
-    Parse { filename: PathBuf },
-    Evaluate { filename: PathBuf },
-    Run { filename: PathBuf },
+    Tokenize {
+        filename: PathBuf,
+    },
+    Parse {
+        filename: PathBuf,
+    },
+    Evaluate {
+        filename: PathBuf,
+    },
+    Run {
+        filename: PathBuf,
+        #[arg(long)]
+        print_ast: bool,
+    },
 }
 
 fn main() -> Result<(), LoxError> {
@@ -76,15 +86,33 @@ fn main() -> Result<(), LoxError> {
                 }
             };
         }
-        Commands::Run { filename } => {
+        Commands::Run {
+            filename,
+            print_ast,
+        } => {
             let source = fs::read_to_string(filename)?;
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
-            let program: Result<Vec<_>, _> = parser::Parser::new(&source, tokens?).collect();
-            if program.is_err() {
+            let (statements, errors): (Vec<_>, Vec<_>) =
+                parser::Parser::new(&source, tokens?).partition(Result::is_ok);
+
+            let mut is_err = false;
+            for error in errors.into_iter().map(Result::unwrap_err) {
+                eprintln!("Parse error: {error}");
+                is_err = true;
+            }
+
+            if is_err {
                 process::exit(65);
             }
 
-            match interpreter::execute(program?) {
+            let program: Vec<_> = statements.into_iter().map(Result::unwrap).collect();
+            if print_ast {
+                for statement in &program {
+                    println!("{statement}");
+                }
+            }
+
+            match interpreter::execute(program.into_iter()) {
                 Ok(_) => (),
                 Err(error) => {
                     eprintln!("{error}");
