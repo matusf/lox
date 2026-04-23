@@ -253,7 +253,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                                 self.current += 1;
                                 break;
                             }
-                            Some(_) => self.current += 1,
+                            Some(c) => self.current += c.len_utf8(),
                             None => {
                                 return Some(Err(Error::UnterminatedString { line: self.line }));
                             }
