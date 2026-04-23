@@ -164,10 +164,10 @@ pub struct Parser<'a> {
 impl<'a> Iterator for Parser<'a> {
     type Item = Result<Statement<'a>, Error>;
 
-    // program → statement* EOF ;
+    // program → declaration* EOF ;
     fn next(&mut self) -> Option<Self::Item> {
         self.tokens.peek()?;
-        Some(self.parse_statement())
+        Some(self.parse_declaration())
     }
 }
 
@@ -179,9 +179,35 @@ impl<'a> Parser<'a> {
         }
     }
 
+    // declaration → varDecl | statement ;
+    fn parse_declaration(&mut self) -> Result<Statement<'a>, Error> {
+        // TODO: Sync the parser here?
+
+        if self.peek_eq(TokenType::Var) {
+            self.parse_var_decl()
+        } else {
+            self.parse_statement()
+        }
+    }
+
+    // varDecl → "var" IDENTIFIER ( "=" expression )? ";" ;
+    fn parse_var_decl(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::Var)?;
+        let ident = self.expect(TokenType::Identifier)?.lexeme;
+
+        let expr = if self.parse_if_eq(TokenType::Equal).is_some() {
+            Some(self.parse_expression()?)
+        } else {
+            None
+        };
+
+        self.expect(TokenType::Semicolon)?;
+        Ok(Statement::VarDecl(ident, expr))
+    }
+
     // statement → exprStmt | printStmt ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
-        if self.peek_match(|t| t == TokenType::Print) {
+        if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
         } else {
             self.parse_expr_statement()
@@ -270,7 +296,7 @@ impl<'a> Parser<'a> {
         self.parse_primary()
     }
 
-    // primary → NUMBER | STRING | "true" | "false" | "nil" | "(" expression ")" ;
+    // primary → "true" | "false" | "nil" | NUMBER | STRING | "(" expression ")" | IDENTIFIER ;
     fn parse_primary(&mut self) -> Result<Expr<'a>, Error> {
         let token = self.tokens.next().ok_or(Error::UnexpectedEof)?;
 
@@ -294,14 +320,19 @@ impl<'a> Parser<'a> {
     }
 
     fn peek_match(&mut self, predicate: fn(TokenType) -> bool) -> bool {
-        self.tokens
-            .peek()
-            .map(|token| predicate(token.typ))
-            .unwrap_or_default()
+        self.tokens.peek().is_some_and(|token| predicate(token.typ))
+    }
+
+    fn peek_eq(&mut self, token_type: TokenType) -> bool {
+        self.tokens.peek().is_some_and(|t| t.typ == token_type)
     }
 
     fn parse_if(&mut self, predicate: impl Fn(TokenType) -> bool) -> Option<Token<'a>> {
         self.tokens.next_if(|t| predicate(t.typ))
+    }
+
+    fn parse_if_eq(&mut self, token_type: TokenType) -> Option<Token<'a>> {
+        self.tokens.next_if(|t| t.typ == token_type)
     }
 
     fn expect_match(&mut self, predicate: impl Fn(TokenType) -> bool) -> Result<Token<'a>, Error> {
