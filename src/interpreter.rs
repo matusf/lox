@@ -2,7 +2,7 @@ use std::{borrow::Cow, fmt::Display};
 
 use thiserror::Error;
 
-use crate::parser::{BinOp, Expr, Literal, UnaryOp};
+use crate::parser::{BinOp, Expr, Literal, Statement, UnaryOp};
 
 #[derive(Debug)]
 pub enum Value<'a> {
@@ -10,18 +10,6 @@ pub enum Value<'a> {
     String(Cow<'a, str>),
     Bool(bool),
     Nil,
-}
-
-impl<'a> PartialEq for Value<'a> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Number(_), Self::Number(_)) => true,
-            (Self::String(_), Self::String(_)) => true,
-            (Self::Bool(_), Self::Bool(_)) => true,
-            (Self::Nil, Self::Nil) => true,
-            (_, _) => false,
-        }
-    }
 }
 
 impl<'a> Display for Value<'a> {
@@ -48,6 +36,20 @@ pub enum Error {
         lhs: String,
         rhs: String,
     },
+}
+
+pub fn execute<'a>(statements: Vec<Statement<'a>>) -> Result<(), Error> {
+    for statement in statements {
+        match statement {
+            Statement::Expr(expr) => {
+                eval(expr)?;
+            }
+            Statement::Print(expr) => {
+                println!("{}", eval(expr)?);
+            }
+        };
+    }
+    Ok(())
 }
 
 pub fn eval(expr: Expr<'_>) -> Result<Value<'_>, Error> {

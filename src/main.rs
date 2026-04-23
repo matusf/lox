@@ -18,6 +18,7 @@ enum Commands {
     Tokenize { filename: PathBuf },
     Parse { filename: PathBuf },
     Evaluate { filename: PathBuf },
+    Run { filename: PathBuf },
 }
 
 fn main() -> Result<(), LoxError> {
@@ -71,6 +72,22 @@ fn main() -> Result<(), LoxError> {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
+                    process::exit(70);
+                }
+            };
+        }
+        Commands::Run { filename } => {
+            let source = fs::read_to_string(filename)?;
+            let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
+            let program: Result<Vec<_>, _> = parser::Parser::new(&source, tokens?).collect();
+            if program.is_err() {
+                process::exit(65);
+            }
+
+            match interpreter::execute(program?) {
+                Ok(_) => (),
+                Err(error) => {
+                    eprintln!("{error}");
                     process::exit(70);
                 }
             };
