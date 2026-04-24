@@ -80,7 +80,7 @@ fn main() -> Result<(), LoxError> {
             let source = fs::read_to_string(filename)?;
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
             let expr = parser::Parser::new(&source, tokens?).parse_expression()?;
-            match interpreter::eval(expr, &mut Environment::default()) {
+            match interpreter::eval(&expr, &mut Environment::default()) {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
@@ -114,7 +114,7 @@ fn main() -> Result<(), LoxError> {
                 }
             }
 
-            match interpreter::execute(program.into_iter(), &mut Environment::default()) {
+            match interpreter::execute(program.iter(), &mut Environment::default()) {
                 Ok(()) => (),
                 Err(error) => {
                     eprintln!("{error}");

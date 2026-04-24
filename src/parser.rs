@@ -109,7 +109,7 @@ impl<'a> From<Token<'a>> for BinOp {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum UnaryOp {
     Negate,
     Minus,
@@ -189,6 +189,7 @@ pub enum Statement<'a> {
     VarDecl(&'a str, Option<Expr<'a>>),
     Block(Vec<Statement<'a>>),
     IfElse(Expr<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
+    While(Expr<'a>, Box<Statement<'a>>),
 }
 
 impl Display for Statement<'_> {
@@ -207,6 +208,7 @@ impl Display for Statement<'_> {
             }
             Statement::IfElse(expr, yes, Some(no)) => write!(f, "(if {expr} {yes} {no})"),
             Statement::IfElse(expr, yes, None) => write!(f, "(if {expr} {yes})"),
+            Statement::While(expr, statement) => write!(f, "(while {expr} {statement})"),
         }
     }
 }
@@ -262,6 +264,7 @@ impl<'a> Parser<'a> {
     }
 
     // statement → exprStmt | ifStmt | printStmt | block ;
+    // statement → exprStmt | ifStmt | printStmt | whileStmt | block ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
         if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
@@ -269,6 +272,8 @@ impl<'a> Parser<'a> {
             self.parse_if_statement()
         } else if self.peek_eq(TokenType::LeftBrace) {
             self.parse_block()
+        } else if self.peek_eq(TokenType::While) {
+            self.parse_while_statement()
         } else {
             self.parse_expr_statement()
         }
@@ -317,6 +322,15 @@ impl<'a> Parser<'a> {
 
         self.expect(TokenType::RightBrace)?;
         Ok(Statement::Block(block))
+    }
+
+    // whileStmt → "while" "(" expression ")" statement ;
+    fn parse_while_statement(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::While)?;
+        self.expect(TokenType::LeftParen)?;
+        let expr = self.parse_expression()?;
+        self.expect(TokenType::RightParen)?;
+        Ok(Statement::While(expr, Box::new(self.parse_statement()?)))
     }
 
     // expression → assignment ;

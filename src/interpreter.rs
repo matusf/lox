@@ -92,7 +92,7 @@ impl<'a> Environment<'a> {
 }
 
 pub fn execute<'a>(
-    statements: impl Iterator<Item = Statement<'a>>,
+    statements: impl Iterator<Item = &'a Statement<'a>>,
     env: &mut Environment<'a>,
 ) -> Result<(), Error> {
     for statement in statements {
@@ -110,53 +110,58 @@ pub fn execute<'a>(
             }
             Statement::Block(statements) => {
                 let mut env = Environment::from_enclosing(env.clone());
-                execute(statements.into_iter(), &mut env)?;
+                execute(statements.iter(), &mut env)?;
             }
             Statement::IfElse(condition, yes, no) => {
                 let condition = eval(condition, env)?;
                 if condition.is_truthy() {
-                    execute(Some(*yes).into_iter(), env)?;
+                    execute(Some(yes.as_ref()).into_iter(), env)?;
                 } else if let Some(no) = no {
-                    execute(Some(*no).into_iter(), env)?;
+                    execute(Some(no.as_ref()).into_iter(), env)?;
                 };
+            }
+            Statement::While(condition, statement) => {
+                while eval(condition, env)?.is_truthy() {
+                    execute(Some(statement.as_ref()).into_iter(), env)?;
+                }
             }
         }
     }
     Ok(())
 }
 
-pub fn eval<'a>(expr: Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Error> {
+pub fn eval<'a>(expr: &Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Error> {
     let value = match expr {
         Expr::Literal(literal) => match literal {
-            Literal::Bool(b) => Value::Bool(b),
+            Literal::Bool(b) => Value::Bool(*b),
             Literal::Nil => Value::Nil,
-            Literal::Number(n) => Value::Number(n),
+            Literal::Number(n) => Value::Number(*n),
             Literal::String(s) => Value::String(Rc::from(s.trim_matches('"'))),
             Literal::Identifier(name) => env.get(name)?,
         },
-        Expr::Group(expr) => eval(*expr, env)?,
-        Expr::BinOp(bin_op, lhs, rhs) => eval_bin_op(bin_op, *lhs, *rhs, env)?,
-        Expr::UnaryOp(unary_op, expr) => eval_unary_op(unary_op, *expr, env)?,
+        Expr::Group(expr) => eval(expr, env)?,
+        Expr::BinOp(bin_op, lhs, rhs) => eval_bin_op(bin_op, lhs, rhs, env)?,
+        Expr::UnaryOp(unary_op, expr) => eval_unary_op(unary_op, expr, env)?,
         Expr::Assign(name, expr) => {
-            let value = eval(*expr, env)?;
+            let value = eval(expr, env)?;
             env.assign(name, value.clone())?;
             value
         }
         Expr::LogicOp(op, lhs, rhs) => match op {
             LogicOp::And => {
-                let lhs = eval(*lhs, env)?;
+                let lhs = eval(lhs, env)?;
                 if lhs.is_truthy() {
-                    eval(*rhs, env)?
+                    eval(rhs, env)?
                 } else {
                     lhs
                 }
             }
             LogicOp::Or => {
-                let lhs = eval(*lhs, env)?;
+                let lhs = eval(lhs, env)?;
                 if lhs.is_truthy() {
                     lhs
                 } else {
-                    eval(*rhs, env)?
+                    eval(rhs, env)?
                 }
             }
         },
@@ -166,8 +171,8 @@ pub fn eval<'a>(expr: Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Erro
 }
 
 fn eval_unary_op<'a>(
-    unary_op: UnaryOp,
-    expr: Expr<'a>,
+    unary_op: &UnaryOp,
+    expr: &Expr<'a>,
     env: &mut Environment<'a>,
 ) -> Result<Value, Error> {
     let value = eval(expr, env)?;
@@ -184,9 +189,9 @@ fn eval_unary_op<'a>(
 }
 
 fn eval_bin_op<'a>(
-    bin_op: BinOp,
-    lhs: Expr<'a>,
-    rhs: Expr<'a>,
+    bin_op: &BinOp,
+    lhs: &Expr<'a>,
+    rhs: &Expr<'a>,
     env: &mut Environment<'a>,
 ) -> Result<Value, Error> {
     use BinOp::{
