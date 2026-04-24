@@ -263,11 +263,12 @@ impl<'a> Parser<'a> {
         Ok(Statement::VarDecl(ident, expr))
     }
 
-    // statement → exprStmt | ifStmt | printStmt | block ;
-    // statement → exprStmt | ifStmt | printStmt | whileStmt | block ;
+    // statement → exprStmt | forStmt | ifStmt | printStmt | whileStmt | block ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
         if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
+        } else if self.peek_eq(TokenType::For) {
+            self.parse_for_statement()
         } else if self.peek_eq(TokenType::If) {
             self.parse_if_statement()
         } else if self.peek_eq(TokenType::LeftBrace) {
@@ -277,6 +278,58 @@ impl<'a> Parser<'a> {
         } else {
             self.parse_expr_statement()
         }
+    }
+
+    // forStmt → "for" "(" ( varDecl | exprStmt | ";" ) | expression? ";" | expression? ")" statement ;
+    fn parse_for_statement(&mut self) -> Result<Statement<'a>, Error> {
+        let mut block = Vec::new();
+
+        // for (
+        self.expect(TokenType::For)?;
+        self.expect(TokenType::LeftParen)?;
+
+        // var = <expr>;
+        if self.peek_eq(TokenType::Var) {
+            block.push(self.parse_var_decl()?);
+        } else if self.peek_eq(TokenType::Semicolon) {
+            self.expect(TokenType::Semicolon)?;
+        } else {
+            block.push(self.parse_expr_statement()?);
+        };
+
+        // <condition> ;
+        let condition = if !self.peek_eq(TokenType::Semicolon) {
+            self.parse_expression()?
+        } else {
+            Expr::Literal(Literal::Bool(true))
+        };
+        self.expect(TokenType::Semicolon)?;
+
+        // <increment> )
+        let mut increment = None;
+        if !self.peek_eq(TokenType::RightParen) {
+            increment = Some(self.parse_expression()?);
+        }
+        self.expect(TokenType::RightParen)?;
+
+        // <body>
+        let body = self.parse_statement()?;
+
+        // If there is increment create a new block as the while block consisting of
+        // increment and while body. e.g. while { <body>; incr }
+        let mut increment_block = Vec::new();
+        if let Some(increment) = increment {
+            increment_block.push(body);
+            increment_block.push(Statement::Expr(increment));
+            block.push(Statement::While(
+                condition,
+                Box::new(Statement::Block(increment_block)),
+            ));
+        } else {
+            block.push(Statement::While(condition, Box::new(body)));
+        }
+
+        Ok(Statement::Block(block))
     }
 
     // ifStmt → "if" "(" expression ")" statement ( "else" statement )? ;
