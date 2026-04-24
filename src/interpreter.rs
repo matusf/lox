@@ -93,7 +93,7 @@ impl<'a> Environment<'a> {
 
 pub fn execute<'a>(
     statements: impl Iterator<Item = &'a Statement<'a>>,
-    env: &mut Environment<'a>,
+    env: &Environment<'a>,
 ) -> Result<(), Error> {
     for statement in statements {
         match statement {
@@ -109,8 +109,8 @@ pub fn execute<'a>(
                 env.define(name, value);
             }
             Statement::Block(statements) => {
-                let mut env = Environment::from_enclosing(env.clone());
-                execute(statements.iter(), &mut env)?;
+                let env = Environment::from_enclosing(env.clone());
+                execute(statements.iter(), &env)?;
             }
             Statement::IfElse(condition, yes, no) => {
                 let condition = eval(condition, env)?;
@@ -130,7 +130,7 @@ pub fn execute<'a>(
     Ok(())
 }
 
-pub fn eval<'a>(expr: &Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Error> {
+pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> {
     let value = match expr {
         Expr::Literal(literal) => match literal {
             Literal::Bool(b) => Value::Bool(*b),
@@ -173,7 +173,7 @@ pub fn eval<'a>(expr: &Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Err
 fn eval_unary_op<'a>(
     unary_op: &UnaryOp,
     expr: &Expr<'a>,
-    env: &mut Environment<'a>,
+    env: &Environment<'a>,
 ) -> Result<Value, Error> {
     let value = eval(expr, env)?;
     match (&unary_op, &value) {
@@ -192,7 +192,7 @@ fn eval_bin_op<'a>(
     bin_op: &BinOp,
     lhs: &Expr<'a>,
     rhs: &Expr<'a>,
-    env: &mut Environment<'a>,
+    env: &Environment<'a>,
 ) -> Result<Value, Error> {
     use BinOp::{
         Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
