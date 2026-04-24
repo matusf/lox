@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
 use thiserror::Error;
 
-use crate::parser::{BinOp, Expr, Literal, Statement, UnaryOp};
+use crate::parser::{BinOp, Expr, Literal, LogicOp, Statement, UnaryOp};
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -20,6 +20,12 @@ impl Display for Value {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
         }
+    }
+}
+
+impl Value {
+    fn is_truthy(&self) -> bool {
+        !matches!(self, Value::Nil | Value::Bool(false))
     }
 }
 
@@ -106,6 +112,14 @@ pub fn execute<'a>(
                 let mut env = Environment::from_enclosing(env.clone());
                 execute(statements.into_iter(), &mut env)?;
             }
+            Statement::IfElse(condition, yes, no) => {
+                let condition = eval(condition, env)?;
+                if condition.is_truthy() {
+                    execute(Some(*yes).into_iter(), env)?;
+                } else if let Some(no) = no {
+                    execute(Some(*no).into_iter(), env)?;
+                };
+            }
         }
     }
     Ok(())
@@ -128,6 +142,24 @@ pub fn eval<'a>(expr: Expr<'a>, env: &mut Environment<'a>) -> Result<Value, Erro
             env.assign(name, value.clone())?;
             value
         }
+        Expr::LogicOp(op, lhs, rhs) => match op {
+            LogicOp::And => {
+                let lhs = eval(*lhs, env)?;
+                if lhs.is_truthy() {
+                    eval(*rhs, env)?
+                } else {
+                    lhs
+                }
+            }
+            LogicOp::Or => {
+                let lhs = eval(*lhs, env)?;
+                if lhs.is_truthy() {
+                    lhs
+                } else {
+                    eval(*rhs, env)?
+                }
+            }
+        },
     };
 
     Ok(value)

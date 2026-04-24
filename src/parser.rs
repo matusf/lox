@@ -135,12 +135,38 @@ impl<'a> From<Token<'a>> for UnaryOp {
 }
 
 #[derive(Debug)]
+pub enum LogicOp {
+    And,
+    Or,
+}
+
+impl<'a> From<Token<'a>> for LogicOp {
+    fn from(token: Token<'a>) -> Self {
+        match token.typ {
+            TokenType::And => Self::And,
+            TokenType::Or => Self::Or,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Display for LogicOp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LogicOp::And => write!(f, "and"),
+            LogicOp::Or => write!(f, "or"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
     Group(Box<Expr<'a>>),
     BinOp(BinOp, Box<Expr<'a>>, Box<Expr<'a>>),
     UnaryOp(UnaryOp, Box<Expr<'a>>),
     Assign(&'a str, Box<Expr<'a>>),
+    LogicOp(LogicOp, Box<Expr<'a>>, Box<Expr<'a>>),
 }
 
 impl Display for Expr<'_> {
@@ -151,6 +177,7 @@ impl Display for Expr<'_> {
             Expr::BinOp(bin_op, lhs, rhs) => write!(f, "({bin_op} {lhs} {rhs})"),
             Expr::UnaryOp(unary_op, expr) => write!(f, "({unary_op} {expr})"),
             Expr::Assign(ident, expr) => write!(f, "(= {ident} {expr})"),
+            Expr::LogicOp(op, lhs, rhs) => write!(f, "({op} ({lhs}) ({rhs})"),
         }
     }
 }
@@ -161,6 +188,7 @@ pub enum Statement<'a> {
     Print(Expr<'a>),
     VarDecl(&'a str, Option<Expr<'a>>),
     Block(Vec<Statement<'a>>),
+    IfElse(Expr<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
 }
 
 impl Display for Statement<'_> {
@@ -177,6 +205,8 @@ impl Display for Statement<'_> {
                 }
                 write!(f, ")")
             }
+            Statement::IfElse(expr, yes, Some(no)) => write!(f, "(if {expr} {yes} {no})"),
+            Statement::IfElse(expr, yes, None) => write!(f, "(if {expr} {yes})"),
         }
     }
 }
@@ -231,15 +261,34 @@ impl<'a> Parser<'a> {
         Ok(Statement::VarDecl(ident, expr))
     }
 
-    // statement → exprStmt | printStmt | block ;
+    // statement → exprStmt | ifStmt | printStmt | block ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
         if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
+        } else if self.peek_eq(TokenType::If) {
+            self.parse_if_statement()
         } else if self.peek_eq(TokenType::LeftBrace) {
             self.parse_block()
         } else {
             self.parse_expr_statement()
         }
+    }
+
+    // ifStmt → "if" "(" expression ")" statement ( "else" statement )? ;
+    fn parse_if_statement(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::If)?;
+        self.expect(TokenType::LeftParen)?;
+        let condition = self.parse_expression()?;
+        self.expect(TokenType::RightParen)?;
+        let yes = self.parse_statement()?;
+
+        let no = if self.peek_eq(TokenType::Else) {
+            self.expect(TokenType::Else)?;
+            Some(Box::new(self.parse_statement()?))
+        } else {
+            None
+        };
+        Ok(Statement::IfElse(condition, Box::new(yes), no))
     }
 
     // exprStmt → expression ";" ;
@@ -275,9 +324,9 @@ impl<'a> Parser<'a> {
         self.parse_assignment()
     }
 
-    // assignment → IDENTIFIER "=" assignment | equality ;
+    // assignment → IDENTIFIER "=" assignment | logic_or ;
     fn parse_assignment(&mut self) -> Result<Expr<'a>, Error> {
-        let expr = self.parse_equality()?;
+        let expr = self.parse_logic_or()?;
         if self.parse_if_eq(TokenType::Equal).is_some() {
             let rhs = self.parse_assignment()?;
             if let Expr::Literal(Literal::Identifier(name)) = expr {
@@ -288,9 +337,27 @@ impl<'a> Parser<'a> {
                 })
             }
         } else {
-            // Parsed equality
+            // Parsed logic or
             Ok(expr)
         }
+    }
+
+    // logic_or → logic_and ( "or" logic_and )* ;
+    fn parse_logic_or(&mut self) -> Result<Expr<'a>, Error> {
+        let mut expr = self.parse_logic_and()?;
+        while let Some(op) = self.parse_if_eq(TokenType::Or) {
+            expr = Expr::LogicOp(op.into(), Box::new(expr), Box::new(self.parse_logic_and()?));
+        }
+        Ok(expr)
+    }
+
+    // logic_and → equality ( "and" equality )* ;
+    fn parse_logic_and(&mut self) -> Result<Expr<'a>, Error> {
+        let mut expr = self.parse_equality()?;
+        while let Some(op) = self.parse_if_eq(TokenType::And) {
+            expr = Expr::LogicOp(op.into(), Box::new(expr), Box::new(self.parse_equality()?));
+        }
+        Ok(expr)
     }
 
     // equality → comparison ( ( "!=" | "==" ) comparison )* ;
