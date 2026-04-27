@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::{fs, process};
 
 use clap::{Parser, Subcommand};
@@ -80,7 +81,7 @@ fn main() -> Result<(), LoxError> {
             let source = fs::read_to_string(filename)?;
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
             let expr = parser::Parser::new(&source, tokens?).parse_expression()?;
-            match interpreter::eval(&expr, &Environment::default()) {
+            match interpreter::eval(&expr, Rc::new(Environment::default())) {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
@@ -114,7 +115,7 @@ fn main() -> Result<(), LoxError> {
                 }
             }
 
-            match interpreter::execute(program.iter(), &Environment::default()) {
+            match interpreter::execute(program.iter(), Rc::new(Environment::default())) {
                 Ok(()) => (),
                 Err(error) => {
                     eprintln!("{error}");

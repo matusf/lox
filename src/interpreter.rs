@@ -5,25 +5,31 @@ use thiserror::Error;
 use crate::parser::{BinOp, Expr, Literal, LogicOp, Statement, UnaryOp};
 
 #[derive(Debug, Clone)]
-pub enum Value {
+pub enum Value<'a> {
     Number(f64),
     String(Rc<str>),
+    Func {
+        name: &'a str,
+        args: &'a [&'a str],
+        body: &'a [Statement<'a>],
+    },
     Bool(bool),
     Nil,
 }
 
-impl Display for Value {
+impl<'a> Display for Value<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Number(n) => write!(f, "{n}"),
             Value::String(s) => write!(f, "{s}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
+            Value::Func { name, .. } => write!(f, "<fn {name}>"),
         }
     }
 }
 
-impl Value {
+impl<'a> Value<'a> {
     fn is_truthy(&self) -> bool {
         !matches!(self, Value::Nil | Value::Bool(false))
     }
@@ -33,9 +39,15 @@ impl Value {
 #[error("Runtime error")]
 pub enum Error {
     #[error("Mismatched types: expected `{expected}` but got `{got}`")]
-    MismachedTypes { expected: String, got: String },
+    MismachedTypes {
+        expected: String,
+        got: String,
+    },
     #[error("Invalid Unary operation: {op} {value}")]
-    InvalidUnaryOperation { op: String, value: String },
+    InvalidUnaryOperation {
+        op: String,
+        value: String,
+    },
     #[error("Invalid binary operation: {lhs} {op} {rhs}")]
     InvalidBinaryOperation {
         op: String,
@@ -43,28 +55,31 @@ pub enum Error {
         rhs: String,
     },
     #[error("Variable `{name}` is not defined")]
-    UndefinedVariable { name: String },
+    UndefinedVariable {
+        name: String,
+    },
+    ValueNotCallable,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default)]
 pub struct Environment<'a> {
-    values: Rc<RefCell<HashMap<&'a str, Value>>>,
-    enclosing: Option<Box<Environment<'a>>>,
+    values: RefCell<HashMap<&'a str, Value<'a>>>,
+    enclosing: Option<Rc<Environment<'a>>>,
 }
 
 impl<'a> Environment<'a> {
-    fn from_enclosing(enclosing: Self) -> Self {
-        Self {
-            values: Rc::default(),
-            enclosing: Some(Box::new(enclosing)),
-        }
+    fn from_enclosing(enclosing: Rc<Self>) -> Rc<Self> {
+        Rc::new(Self {
+            values: RefCell::default(),
+            enclosing: Some(enclosing),
+        })
     }
 
-    fn define(&self, name: &'a str, value: Value) {
+    fn define(&self, name: &'a str, value: Value<'a>) {
         self.values.borrow_mut().insert(name, value);
     }
 
-    fn assign(&self, name: &'a str, value: Value) -> Result<(), Error> {
+    fn assign(&self, name: &'a str, value: Value<'a>) -> Result<(), Error> {
         if !self.values.borrow().contains_key(name) {
             return self.enclosing.as_ref().map_or(
                 Err(Error::UndefinedVariable {
@@ -76,7 +91,8 @@ impl<'a> Environment<'a> {
         self.values.borrow_mut().insert(name, value);
         Ok(())
     }
-    fn get(&self, name: &str) -> Result<Value, Error> {
+
+    fn get(&self, name: &str) -> Result<Value<'a>, Error> {
         match self.values.borrow().get(name) {
             // NOTE: This clone should be relatively cheap as string is
             // behind Rc and other fields are small
@@ -89,13 +105,29 @@ impl<'a> Environment<'a> {
             ),
         }
     }
+
+    fn from_builtins() -> Rc<Self> {
+        let env = Self::default();
+        let name = "clock";
+        env.define(
+            name,
+            Value::Func {
+                name,
+                args: &[],
+                body: &[],
+            },
+        );
+
+        Rc::new(env)
+    }
 }
 
 pub fn execute<'a>(
     statements: impl Iterator<Item = &'a Statement<'a>>,
-    env: &Environment<'a>,
+    env: Rc<Environment<'a>>,
 ) -> Result<(), Error> {
     for statement in statements {
+        let env = env.clone();
         match statement {
             Statement::Expr(expr) => {
                 eval(expr, env)?;
@@ -105,15 +137,14 @@ pub fn execute<'a>(
             }
             Statement::VarDecl(name, None) => env.define(name, Value::Nil),
             Statement::VarDecl(name, Some(expr)) => {
-                let value = eval(expr, env)?;
+                let value = eval(expr, env.clone())?;
                 env.define(name, value);
             }
             Statement::Block(statements) => {
-                let env = Environment::from_enclosing(env.clone());
-                execute(statements.iter(), &env)?;
+                execute(statements.iter(), Environment::from_enclosing(env))?;
             }
             Statement::IfElse(condition, yes, no) => {
-                let condition = eval(condition, env)?;
+                let condition = eval(condition, env.clone())?;
                 if condition.is_truthy() {
                     execute(Some(yes.as_ref()).into_iter(), env)?;
                 } else if let Some(no) = no {
@@ -121,16 +152,19 @@ pub fn execute<'a>(
                 };
             }
             Statement::While(condition, statement) => {
-                while eval(condition, env)?.is_truthy() {
-                    execute(Some(statement.as_ref()).into_iter(), env)?;
+                while eval(condition, env.clone())?.is_truthy() {
+                    execute(Some(statement.as_ref()).into_iter(), env.clone())?;
                 }
+            }
+            Statement::Func { name, args, body } => {
+                env.define(name, Value::Func { name, args, body });
             }
         }
     }
     Ok(())
 }
 
-pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> {
+pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, Error> {
     let value = match expr {
         Expr::Literal(literal) => match literal {
             Literal::Bool(b) => Value::Bool(*b),
@@ -143,13 +177,13 @@ pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> 
         Expr::BinOp(bin_op, lhs, rhs) => eval_bin_op(bin_op, lhs, rhs, env)?,
         Expr::UnaryOp(unary_op, expr) => eval_unary_op(unary_op, expr, env)?,
         Expr::Assign(name, expr) => {
-            let value = eval(expr, env)?;
+            let value = eval(expr, env.clone())?;
             env.assign(name, value.clone())?;
             value
         }
         Expr::LogicOp(op, lhs, rhs) => match op {
             LogicOp::And => {
-                let lhs = eval(lhs, env)?;
+                let lhs = eval(lhs, env.clone())?;
                 if lhs.is_truthy() {
                     eval(rhs, env)?
                 } else {
@@ -157,7 +191,7 @@ pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> 
                 }
             }
             LogicOp::Or => {
-                let lhs = eval(lhs, env)?;
+                let lhs = eval(lhs, env.clone())?;
                 if lhs.is_truthy() {
                     lhs
                 } else {
@@ -165,6 +199,27 @@ pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> 
                 }
             }
         },
+        Expr::Call(callee, args) => {
+            let callee = eval(callee, env.clone())?;
+            let Value::Func {
+                args: arg_names,
+                body,
+                ..
+            } = callee
+            else {
+                return Err(Error::ValueNotCallable);
+            };
+
+            // TODO: arity match
+
+            let env = Environment::from_enclosing(env);
+            for (name, arg) in arg_names.iter().zip(args) {
+                env.define(name, eval(arg, env.clone())?);
+            }
+
+            execute(body.iter(), env)?;
+            return Ok(Value::Nil);
+        }
     };
 
     Ok(value)
@@ -173,8 +228,8 @@ pub fn eval<'a>(expr: &Expr<'a>, env: &Environment<'a>) -> Result<Value, Error> 
 fn eval_unary_op<'a>(
     unary_op: &UnaryOp,
     expr: &Expr<'a>,
-    env: &Environment<'a>,
-) -> Result<Value, Error> {
+    env: Rc<Environment<'a>>,
+) -> Result<Value<'a>, Error> {
     let value = eval(expr, env)?;
     match (&unary_op, &value) {
         (UnaryOp::Negate, Value::Bool(b)) => Ok(Value::Bool(!b)),
@@ -192,12 +247,12 @@ fn eval_bin_op<'a>(
     bin_op: &BinOp,
     lhs: &Expr<'a>,
     rhs: &Expr<'a>,
-    env: &Environment<'a>,
-) -> Result<Value, Error> {
+    env: Rc<Environment<'a>>,
+) -> Result<Value<'a>, Error> {
     use BinOp::{
         Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
     };
-    let lhs = eval(lhs, env)?;
+    let lhs = eval(lhs, env.clone())?;
     let rhs = eval(rhs, env)?;
     match (bin_op, lhs, rhs) {
         (BangEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs != rhs)),

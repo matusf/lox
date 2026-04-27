@@ -12,6 +12,8 @@ pub enum Error {
     UnexpectedEof,
     #[error("Unvalid assignment to: {expr}")]
     InvalidAssignment { expr: String },
+    #[error("Function cannot have more than 255 parameters")]
+    TooManyArguments,
 }
 
 #[derive(Debug)]
@@ -167,6 +169,7 @@ pub enum Expr<'a> {
     UnaryOp(UnaryOp, Box<Expr<'a>>),
     Assign(&'a str, Box<Expr<'a>>),
     LogicOp(LogicOp, Box<Expr<'a>>, Box<Expr<'a>>),
+    Call(Box<Expr<'a>>, Box<[Expr<'a>]>),
 }
 
 impl Display for Expr<'_> {
@@ -178,6 +181,13 @@ impl Display for Expr<'_> {
             Expr::UnaryOp(unary_op, expr) => write!(f, "({unary_op} {expr})"),
             Expr::Assign(ident, expr) => write!(f, "(= {ident} {expr})"),
             Expr::LogicOp(op, lhs, rhs) => write!(f, "({op} ({lhs}) ({rhs})"),
+            Expr::Call(expr, exprs) => {
+                write!(f, "(call ({expr}) (")?;
+                for expr in exprs {
+                    write!(f, " ({expr})")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -190,6 +200,11 @@ pub enum Statement<'a> {
     Block(Vec<Statement<'a>>),
     IfElse(Expr<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
     While(Expr<'a>, Box<Statement<'a>>),
+    Func {
+        name: &'a str,
+        args: Box<[&'a str]>,
+        body: Box<[Statement<'a>]>,
+    },
 }
 
 impl Display for Statement<'_> {
@@ -209,6 +224,17 @@ impl Display for Statement<'_> {
             Statement::IfElse(expr, yes, Some(no)) => write!(f, "(if {expr} {yes} {no})"),
             Statement::IfElse(expr, yes, None) => write!(f, "(if {expr} {yes})"),
             Statement::While(expr, statement) => write!(f, "(while {expr} {statement})"),
+            Statement::Func { name, args, body } => {
+                write!(f, "(func {name} (")?;
+                for arg in args.iter() {
+                    write!(f, " {arg}")?
+                }
+                write!(f, ")")?;
+                for statement in body {
+                    write!(f, " {statement}")?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
@@ -237,19 +263,63 @@ impl<'a> Parser<'a> {
         }
     }
 
-    // declaration → varDecl | statement ;
+    // declaration → funDecl | varDecl | statement ;
     fn parse_declaration(&mut self) -> Result<Statement<'a>, Error> {
         // TODO: Sync the parser here?
 
-        if self.peek_eq(TokenType::Var) {
-            self.parse_var_decl()
+        if self.peek_eq(TokenType::Fun) {
+            self.parse_function_declaration()
+        } else if self.peek_eq(TokenType::Var) {
+            self.parse_var_declaration()
         } else {
             self.parse_statement()
         }
     }
 
+    // funDecl → "fun" function ;
+    fn parse_function_declaration(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::Fun)?;
+        self.parse_function()
+    }
+
+    // function → IDENTIFIER "(" parameters? ")" block ;
+    fn parse_function(&mut self) -> Result<Statement<'a>, Error> {
+        let name = self.expect(TokenType::Identifier)?.lexeme;
+
+        self.expect(TokenType::LeftParen)?;
+
+        let mut args = Vec::new();
+        if !self.peek_eq(TokenType::RightParen) {
+            args = self.parse_parameters()?;
+        }
+
+        self.expect(TokenType::RightParen)?;
+
+        let body = self.parse_block_to_vec()?;
+
+        Ok(Statement::Func {
+            name,
+            args: args.into_boxed_slice(),
+            body: body.into_boxed_slice(),
+        })
+    }
+
+    // parameters → IDENTIFIER ( "," IDENTIFIER )* ;
+    fn parse_parameters(&mut self) -> Result<Vec<&'a str>, Error> {
+        let mut args = Vec::new();
+        loop {
+            args.push(self.expect(TokenType::Identifier)?.lexeme);
+            if self.peek_eq(TokenType::RightParen) {
+                break;
+            }
+            self.expect(TokenType::Comma)?;
+        }
+
+        Ok(args)
+    }
+
     // varDecl → "var" IDENTIFIER ( "=" expression )? ";" ;
-    fn parse_var_decl(&mut self) -> Result<Statement<'a>, Error> {
+    fn parse_var_declaration(&mut self) -> Result<Statement<'a>, Error> {
         self.expect(TokenType::Var)?;
         let ident = self.expect(TokenType::Identifier)?.lexeme;
 
@@ -290,7 +360,7 @@ impl<'a> Parser<'a> {
 
         // var = <expr>;
         if self.peek_eq(TokenType::Var) {
-            block.push(self.parse_var_decl()?);
+            block.push(self.parse_var_declaration()?);
         } else if self.peek_eq(TokenType::Semicolon) {
             self.expect(TokenType::Semicolon)?;
         } else {
@@ -366,6 +436,12 @@ impl<'a> Parser<'a> {
 
     // block → "{" declaration* "}" ;
     fn parse_block(&mut self) -> Result<Statement<'a>, Error> {
+        let block = self.parse_block_to_vec()?;
+        Ok(Statement::Block(block))
+    }
+
+    // Helper that returns parsed block without wrapping it in Statement::Block
+    fn parse_block_to_vec(&mut self) -> Result<Vec<Statement<'a>>, Error> {
         self.expect(TokenType::LeftBrace)?;
 
         let mut block = Vec::new();
@@ -374,7 +450,7 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(TokenType::RightBrace)?;
-        Ok(Statement::Block(block))
+        Ok(block)
     }
 
     // whileStmt → "while" "(" expression ")" statement ;
@@ -481,12 +557,47 @@ impl<'a> Parser<'a> {
         Ok(expr)
     }
 
-    // unary → ( "!" | "-" ) unary | primary ;
+    // unary → ( "!" | "-" ) unary | call ;
     fn parse_unary(&mut self) -> Result<Expr<'a>, Error> {
         if let Some(op) = self.parse_if(|t| matches!(t, TokenType::Bang | TokenType::Minus)) {
             return Ok(Expr::UnaryOp(op.into(), Box::new(self.parse_unary()?)));
         }
-        self.parse_primary()
+        self.parse_call()
+    }
+
+    // call → primary ( "(" arguments? ")" )* ;
+    fn parse_call(&mut self) -> Result<Expr<'a>, Error> {
+        let expr = self.parse_primary()?;
+
+        if self.parse_if_eq(TokenType::LeftParen).is_some() {
+            let mut args = Vec::new();
+            // Start parsing function call argument list
+            if !self.peek_eq(TokenType::RightParen) {
+                args = self.parse_arguments()?;
+            }
+            self.expect(TokenType::RightParen)?;
+
+            if args.len() >= 255 {
+                return Err(Error::TooManyArguments);
+            }
+            Ok(Expr::Call(Box::new(expr), args.into_boxed_slice()))
+        } else {
+            Ok(expr)
+        }
+    }
+
+    // arguments → expression ( "," expression )* ;
+    fn parse_arguments(&mut self) -> Result<Vec<Expr<'a>>, Error> {
+        let mut args = Vec::new();
+        loop {
+            args.push(self.parse_expression()?);
+            if self.peek_eq(TokenType::RightParen) {
+                break;
+            }
+            self.expect(TokenType::Comma)?;
+        }
+
+        Ok(args)
     }
 
     // primary → "true" | "false" | "nil" | NUMBER | STRING | "(" expression ")" | IDENTIFIER ;
