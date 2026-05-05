@@ -115,7 +115,7 @@ fn main() -> Result<(), LoxError> {
                 }
             }
 
-            match interpreter::execute(program.iter(), Rc::new(Environment::default())) {
+            match interpreter::execute(program.iter(), Rc::new(Environment::with_builtins())) {
                 Ok(()) => (),
                 Err(error) => {
                     eprintln!("{error}");

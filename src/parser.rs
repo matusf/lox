@@ -162,6 +162,12 @@ impl Display for LogicOp {
 }
 
 #[derive(Debug)]
+pub struct Func<'a> {
+    pub callee: Box<Expr<'a>>,
+    pub args: Box<[Expr<'a>]>,
+}
+
+#[derive(Debug)]
 pub enum Expr<'a> {
     Literal(Literal<'a>),
     Group(Box<Expr<'a>>),
@@ -169,7 +175,7 @@ pub enum Expr<'a> {
     UnaryOp(UnaryOp, Box<Expr<'a>>),
     Assign(&'a str, Box<Expr<'a>>),
     LogicOp(LogicOp, Box<Expr<'a>>, Box<Expr<'a>>),
-    Call(Box<Expr<'a>>, Box<[Expr<'a>]>),
+    Call(Func<'a>),
 }
 
 impl Display for Expr<'_> {
@@ -181,10 +187,10 @@ impl Display for Expr<'_> {
             Expr::UnaryOp(unary_op, expr) => write!(f, "({unary_op} {expr})"),
             Expr::Assign(ident, expr) => write!(f, "(= {ident} {expr})"),
             Expr::LogicOp(op, lhs, rhs) => write!(f, "({op} ({lhs}) ({rhs})"),
-            Expr::Call(expr, exprs) => {
-                write!(f, "(call ({expr}) (")?;
-                for expr in exprs {
-                    write!(f, " ({expr})")?;
+            Expr::Call(Func { callee, args }) => {
+                write!(f, "(call ({callee}) (")?;
+                for arg in args {
+                    write!(f, " ({arg})")?;
                 }
                 write!(f, ")")
             }
@@ -580,7 +586,10 @@ impl<'a> Parser<'a> {
             if args.len() >= 255 {
                 return Err(Error::TooManyArguments);
             }
-            Ok(Expr::Call(Box::new(expr), args.into_boxed_slice()))
+            Ok(Expr::Call(Func {
+                callee: Box::new(expr),
+                args: args.into_boxed_slice(),
+            }))
         } else {
             Ok(expr)
         }

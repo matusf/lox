@@ -2,7 +2,7 @@ use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
 use thiserror::Error;
 
-use crate::parser::{BinOp, Expr, Literal, LogicOp, Statement, UnaryOp};
+use crate::parser::{BinOp, Expr, Func, Literal, LogicOp, Statement, UnaryOp};
 
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
@@ -12,6 +12,11 @@ pub enum Value<'a> {
         name: &'a str,
         args: &'a [&'a str],
         body: &'a [Statement<'a>],
+    },
+    NativeFunc {
+        name: &'a str,
+        arity: usize,
+        body: fn(&[Value<'a>]) -> Result<Value<'a>, Error>,
     },
     Bool(bool),
     Nil,
@@ -25,6 +30,7 @@ impl<'a> Display for Value<'a> {
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
             Value::Func { name, .. } => write!(f, "<fn {name}>"),
+            Value::NativeFunc { name, .. } => write!(f, "<fn {name}>"),
         }
     }
 }
@@ -43,22 +49,33 @@ pub enum Error {
         expected: String,
         got: String,
     },
+
     #[error("Invalid Unary operation: {op} {value}")]
     InvalidUnaryOperation {
         op: String,
         value: String,
     },
+
     #[error("Invalid binary operation: {lhs} {op} {rhs}")]
     InvalidBinaryOperation {
         op: String,
         lhs: String,
         rhs: String,
     },
+
     #[error("Variable `{name}` is not defined")]
     UndefinedVariable {
         name: String,
     },
     ValueNotCallable,
+    SystemTimeError(#[from] std::time::SystemTimeError),
+
+    #[error("Mismatched arity for function `{name}`:  expected {expected} but got `{got}`")]
+    ArityMismatch {
+        name: String,
+        expected: usize,
+        got: usize,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -106,19 +123,23 @@ impl<'a> Environment<'a> {
         }
     }
 
-    fn from_builtins() -> Rc<Self> {
+    pub fn with_builtins() -> Self {
         let env = Self::default();
         let name = "clock";
         env.define(
             name,
-            Value::Func {
+            Value::NativeFunc {
                 name,
-                args: &[],
-                body: &[],
+                arity: 0,
+                body: |_| {
+                    Ok(std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|t| Value::Number(t.as_secs_f64()))?)
+                },
             },
         );
 
-        Rc::new(env)
+        env
     }
 }
 
@@ -199,26 +220,49 @@ pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, 
                 }
             }
         },
-        Expr::Call(callee, args) => {
+        Expr::Call(Func { callee, args }) => {
             let callee = eval(callee, env.clone())?;
-            let Value::Func {
-                args: arg_names,
-                body,
-                ..
-            } = callee
-            else {
-                return Err(Error::ValueNotCallable);
-            };
 
-            // TODO: arity match
+            let args: Result<Vec<Value<'_>>, _> =
+                args.iter().map(|arg| eval(arg, env.clone())).collect();
+            let args = args?;
 
-            let env = Environment::from_enclosing(env);
-            for (name, arg) in arg_names.iter().zip(args) {
-                env.define(name, eval(arg, env.clone())?);
+            match callee {
+                Value::Func {
+                    name,
+                    args: arg_names,
+                    body,
+                } => {
+                    if args.len() != arg_names.len() {
+                        return Err(Error::ArityMismatch {
+                            name: name.to_string(),
+                            expected: arg_names.len(),
+                            got: args.len(),
+                        });
+                    }
+
+                    let env = Environment::from_enclosing(env);
+                    arg_names
+                        .iter()
+                        .zip(args)
+                        .for_each(|(name, arg)| env.define(name, arg));
+
+                    execute(body.iter(), env)?;
+                    Value::Nil
+                }
+                Value::NativeFunc { name, arity, body } => {
+                    if args.len() != arity {
+                        return Err(Error::ArityMismatch {
+                            name: name.to_string(),
+                            expected: arity,
+                            got: args.len(),
+                        });
+                    }
+
+                    body(&args)?
+                }
+                _ => Err(Error::ValueNotCallable)?,
             }
-
-            execute(body.iter(), env)?;
-            return Ok(Value::Nil);
         }
     };
 
