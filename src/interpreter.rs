@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, iter, rc::Rc};
 
 use thiserror::Error;
 
@@ -167,14 +167,14 @@ pub fn execute<'a>(
             Statement::IfElse(condition, yes, no) => {
                 let condition = eval(condition, env.clone())?;
                 if condition.is_truthy() {
-                    execute(Some(yes.as_ref()).into_iter(), env)?;
+                    execute(iter::once(yes.as_ref()), env)?;
                 } else if let Some(no) = no {
-                    execute(Some(no.as_ref()).into_iter(), env)?;
+                    execute(iter::once(no.as_ref()), env)?;
                 };
             }
             Statement::While(condition, statement) => {
                 while eval(condition, env.clone())?.is_truthy() {
-                    execute(Some(statement.as_ref()).into_iter(), env.clone())?;
+                    execute(iter::once(statement.as_ref()), env.clone())?;
                 }
             }
             Statement::Func { name, args, body } => {
