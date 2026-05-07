@@ -211,6 +211,7 @@ pub enum Statement<'a> {
         args: Box<[&'a str]>,
         body: Box<[Statement<'a>]>,
     },
+    Return(Expr<'a>),
 }
 
 impl Display for Statement<'_> {
@@ -241,6 +242,7 @@ impl Display for Statement<'_> {
                 }
                 write!(f, ")")
             }
+            Statement::Return(expr) => write!(f, "(return {expr})"),
         }
     }
 }
@@ -339,7 +341,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::VarDecl(ident, expr))
     }
 
-    // statement → exprStmt | forStmt | ifStmt | printStmt | whileStmt | block ;
+    // statement → exprStmt | forStmt | ifStmt | printStmt | returnStmt | whileStmt | block ;
     fn parse_statement(&mut self) -> Result<Statement<'a>, Error> {
         if self.peek_eq(TokenType::Print) {
             self.parse_print_statement()
@@ -351,6 +353,8 @@ impl<'a> Parser<'a> {
             self.parse_block()
         } else if self.peek_eq(TokenType::While) {
             self.parse_while_statement()
+        } else if self.peek_eq(TokenType::Return) {
+            self.parse_return_statement()
         } else {
             self.parse_expr_statement()
         }
@@ -438,6 +442,18 @@ impl<'a> Parser<'a> {
         let expr = self.parse_expression()?;
         self.expect(TokenType::Semicolon)?;
         Ok(Statement::Print(expr))
+    }
+
+    // returnStmt → "return" expression? ";" ;
+    fn parse_return_statement(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::Return)?;
+        let expr = if !self.peek_eq(TokenType::Semicolon) {
+            self.parse_expression()?
+        } else {
+            Expr::Literal(Literal::Nil)
+        };
+        self.expect(TokenType::Semicolon)?;
+        Ok(Statement::Return(expr))
     }
 
     // block → "{" declaration* "}" ;

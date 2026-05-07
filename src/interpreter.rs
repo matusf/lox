@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Display, iter, rc::Rc};
+use std::{cell::RefCell, collections::HashMap, fmt::Display, iter, ops::ControlFlow, rc::Rc};
 
 use thiserror::Error;
 
@@ -146,7 +146,7 @@ impl<'a> Environment<'a> {
 pub fn execute<'a>(
     statements: impl Iterator<Item = &'a Statement<'a>>,
     env: Rc<Environment<'a>>,
-) -> Result<(), Error> {
+) -> Result<ControlFlow<Value<'a>>, Error> {
     for statement in statements {
         let env = env.clone();
         match statement {
@@ -162,27 +162,43 @@ pub fn execute<'a>(
                 env.define(name, value);
             }
             Statement::Block(statements) => {
-                execute(statements.iter(), Environment::from_enclosing(env))?;
+                let value = execute(statements.iter(), Environment::from_enclosing(env))?;
+                if let Some(return_value) = value.break_value() {
+                    return Ok(ControlFlow::Break(return_value));
+                };
             }
             Statement::IfElse(condition, yes, no) => {
                 let condition = eval(condition, env.clone())?;
                 if condition.is_truthy() {
-                    execute(iter::once(yes.as_ref()), env)?;
+                    let value = execute(iter::once(yes.as_ref()), env)?;
+                    if let Some(return_value) = value.break_value() {
+                        return Ok(ControlFlow::Break(return_value));
+                    };
                 } else if let Some(no) = no {
-                    execute(iter::once(no.as_ref()), env)?;
-                };
+                    let value = execute(iter::once(no.as_ref()), env)?;
+                    if let Some(return_value) = value.break_value() {
+                        return Ok(ControlFlow::Break(return_value));
+                    };
+                }
             }
             Statement::While(condition, statement) => {
                 while eval(condition, env.clone())?.is_truthy() {
-                    execute(iter::once(statement.as_ref()), env.clone())?;
+                    let value = execute(iter::once(statement.as_ref()), env.clone())?;
+                    if let Some(return_value) = value.break_value() {
+                        return Ok(ControlFlow::Break(return_value));
+                    };
                 }
             }
             Statement::Func { name, args, body } => {
                 env.define(name, Value::Func { name, args, body });
             }
-        }
+            Statement::Return(expr) => {
+                let value = eval(expr, env)?;
+                return Ok(ControlFlow::Break(value));
+            }
+        };
     }
-    Ok(())
+    Ok(ControlFlow::Continue(()))
 }
 
 pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, Error> {
@@ -247,8 +263,10 @@ pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, 
                         .zip(args)
                         .for_each(|(name, arg)| env.define(name, arg));
 
-                    execute(body.iter(), env)?;
-                    Value::Nil
+                    match execute(body.iter(), env)? {
+                        ControlFlow::Continue(()) => Value::Nil,
+                        ControlFlow::Break(value) => value,
+                    }
                 }
                 Value::NativeFunc { name, arity, body } => {
                     if args.len() != arity {

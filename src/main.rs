@@ -1,3 +1,4 @@
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::{fs, process};
@@ -116,7 +117,11 @@ fn main() -> Result<(), LoxError> {
             }
 
             match interpreter::execute(program.iter(), Rc::new(Environment::with_builtins())) {
-                Ok(()) => (),
+                Ok(ControlFlow::Break(v)) => {
+                    eprintln!("Unexpected return {v}");
+                    process::exit(70);
+                }
+                Ok(_) => (),
                 Err(error) => {
                     eprintln!("{error}");
                     process::exit(70);
