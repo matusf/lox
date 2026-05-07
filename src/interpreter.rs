@@ -12,6 +12,7 @@ pub enum Value<'a> {
         name: &'a str,
         args: &'a [&'a str],
         body: &'a [Statement<'a>],
+        closure: Rc<Environment<'a>>,
     },
     NativeFunc {
         name: &'a str,
@@ -190,7 +191,15 @@ pub fn execute<'a>(
                 }
             }
             Statement::Func { name, args, body } => {
-                env.define(name, Value::Func { name, args, body });
+                env.define(
+                    name,
+                    Value::Func {
+                        name,
+                        args,
+                        body,
+                        closure: Environment::from_enclosing(env.clone()),
+                    },
+                );
             }
             Statement::Return(expr) => {
                 let value = eval(expr, env)?;
@@ -248,6 +257,7 @@ pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, 
                     name,
                     args: arg_names,
                     body,
+                    closure,
                 } => {
                     if args.len() != arg_names.len() {
                         return Err(Error::ArityMismatch {
@@ -257,7 +267,7 @@ pub fn eval<'a>(expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, 
                         });
                     }
 
-                    let env = Environment::from_enclosing(env);
+                    let env = Environment::from_enclosing(closure);
                     arg_names
                         .iter()
                         .zip(args)
