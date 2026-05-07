@@ -589,9 +589,9 @@ impl<'a> Parser<'a> {
 
     // call → primary ( "(" arguments? ")" )* ;
     fn parse_call(&mut self) -> Result<Expr<'a>, Error> {
-        let expr = self.parse_primary()?;
+        let mut expr = self.parse_primary()?;
 
-        if self.parse_if_eq(TokenType::LeftParen).is_some() {
+        while self.parse_if_eq(TokenType::LeftParen).is_some() {
             let mut args = Vec::new();
             // Start parsing function call argument list
             if !self.peek_eq(TokenType::RightParen) {
@@ -602,13 +602,14 @@ impl<'a> Parser<'a> {
             if args.len() >= 255 {
                 return Err(Error::TooManyArguments);
             }
-            Ok(Expr::Call(Func {
+
+            expr = Expr::Call(Func {
                 callee: Box::new(expr),
                 args: args.into_boxed_slice(),
-            }))
-        } else {
-            Ok(expr)
+            });
         }
+
+        Ok(expr)
     }
 
     // arguments → expression ( "," expression )* ;
