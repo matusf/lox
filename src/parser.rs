@@ -248,7 +248,7 @@ impl Display for Statement<'_> {
 }
 
 pub struct Parser<'a> {
-    _source: &'a str,
+    source: &'a str,
     tokens: Peekable<vec::IntoIter<Token<'a>>>,
 }
 
@@ -266,9 +266,13 @@ impl<'a> Parser<'a> {
     #[must_use]
     pub fn new(source: &'a str, tokens: Vec<Token<'a>>) -> Self {
         Self {
-            _source: source,
+            source,
             tokens: tokens.into_iter().peekable(),
         }
+    }
+
+    fn compute_token_line(&self, token: &Token<'a>) -> usize {
+        self.source[..token.offset].matches('\n').count()
     }
 
     // declaration → funDecl | varDecl | statement ;
@@ -643,7 +647,7 @@ impl<'a> Parser<'a> {
             | TokenType::False
             | TokenType::True => Ok(Expr::Literal(token.into())),
             _ => Err(Error::UnexpectedToken {
-                line: token.line,
+                line: self.compute_token_line(&token),
                 lexeme: token.lexeme.to_string(),
             }),
         }
@@ -665,7 +669,7 @@ impl<'a> Parser<'a> {
         match self.tokens.next() {
             Some(t) if predicate(t.typ) => Ok(t),
             Some(t) => Err(Error::UnexpectedToken {
-                line: t.line,
+                line: self.compute_token_line(&t),
                 lexeme: t.lexeme.to_string(),
             }),
             None => Err(Error::UnexpectedEof),

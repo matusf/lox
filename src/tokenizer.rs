@@ -13,7 +13,7 @@ pub struct Tokenizer<'a> {
 pub struct Token<'a> {
     pub lexeme: &'a str,
     pub typ: TokenType,
-    pub line: usize,
+    pub offset: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -127,7 +127,8 @@ pub enum Error {
 }
 
 impl<'a> Tokenizer<'a> {
-    #[must_use] pub fn new(source: &'a str) -> Self {
+    #[must_use]
+    pub fn new(source: &'a str) -> Self {
         Self {
             source,
             chars: source.chars().peekable(),
@@ -166,14 +167,13 @@ impl<'a> Iterator for Tokenizer<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         loop {
             let lexeme_start = self.current;
-            let line = self.line;
             let current_char = self.advance()?;
 
             let single_char_token = |typ| -> Option<Result<Token<'a>, Error>> {
                 Some(Ok(Token {
                     typ,
                     lexeme: &self.source[lexeme_start..self.current],
-                    line,
+                    offset: lexeme_start,
                 }))
             };
 
@@ -181,7 +181,7 @@ impl<'a> Iterator for Tokenizer<'a> {
                 Some(Ok(Token {
                     typ,
                     lexeme: &self.source[lexeme_start..lexeme_end],
-                    line,
+                    offset: lexeme_start,
                 }))
             };
             let started = match current_char {
