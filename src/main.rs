@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -5,9 +6,10 @@ use std::{fs, process};
 
 use clap::{Parser, Subcommand};
 use lox::{
-    LoxError, interpreter,
-    interpreter::Environment,
+    LoxError,
+    interpreter::{Environment, Interpreter},
     parser,
+    resolver::Resolver,
     tokenizer::{Token, Tokenizer},
 };
 
@@ -82,7 +84,8 @@ fn main() -> Result<(), LoxError> {
             let source = fs::read_to_string(filename)?;
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
             let expr = parser::Parser::new(&source, tokens?).parse_expression()?;
-            match interpreter::eval(&expr, Rc::new(Environment::default())) {
+            let interpreter = Interpreter::new(HashMap::new());
+            match interpreter.eval(&expr, Rc::new(Environment::default())) {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
@@ -116,11 +119,20 @@ fn main() -> Result<(), LoxError> {
                 }
             }
 
-            match interpreter::execute(program.iter(), Rc::new(Environment::with_builtins())) {
-                Ok(ControlFlow::Break(v)) => {
-                    eprintln!("Unexpected return {v}");
-                    process::exit(70);
+            let resolver = Resolver::default();
+            let locals = match resolver.run(program.iter()) {
+                Err(e) => {
+                    eprintln!("{e}");
+                    process::exit(65);
                 }
+                Ok(locals) => locals,
+            };
+
+            eprintln!("{:?}", &locals);
+            let interpreter = Interpreter::new(locals);
+            let globals = Environment::with_globals();
+            match interpreter.execute(program.iter(), Rc::new(globals)) {
+                Ok(ControlFlow::Break(_)) => unreachable!(),
                 Ok(_) => (),
                 Err(error) => {
                     eprintln!("{error}");

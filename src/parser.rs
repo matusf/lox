@@ -16,13 +16,15 @@ pub enum Error {
     TooManyArguments,
 }
 
+pub type ExprId = usize;
+
 #[derive(Debug)]
 pub enum Literal<'a> {
     Bool(bool),
     Nil,
     Number(f64),
     String(&'a str),
-    Identifier(&'a str),
+    Identifier { name: &'a str, id: ExprId },
 }
 
 impl Display for Literal<'_> {
@@ -38,7 +40,7 @@ impl Display for Literal<'_> {
                 }
             }
             Literal::String(s) => write!(f, "{}", s.trim_matches('"')),
-            Literal::Identifier(ident) => write!(f, "{ident}"),
+            Literal::Identifier { name, .. } => write!(f, "{name}"),
         }
     }
 }
@@ -54,7 +56,10 @@ impl<'a> From<Token<'a>> for Literal<'a> {
                 Self::Number(num)
             }
             TokenType::String => Self::String(token.lexeme),
-            TokenType::Identifier => Self::Identifier(token.lexeme),
+            TokenType::Identifier => Self::Identifier {
+                name: token.lexeme,
+                id: token.offset,
+            },
             _ => unreachable!(),
         }
     }
@@ -173,7 +178,11 @@ pub enum Expr<'a> {
     Group(Box<Expr<'a>>),
     BinOp(BinOp, Box<Expr<'a>>, Box<Expr<'a>>),
     UnaryOp(UnaryOp, Box<Expr<'a>>),
-    Assign(&'a str, Box<Expr<'a>>),
+    Assign {
+        name: &'a str,
+        expr: Box<Expr<'a>>,
+        id: usize,
+    },
     LogicOp(LogicOp, Box<Expr<'a>>, Box<Expr<'a>>),
     Call(Func<'a>),
 }
@@ -185,7 +194,7 @@ impl Display for Expr<'_> {
             Expr::Group(expr) => write!(f, "(group {expr})"),
             Expr::BinOp(bin_op, lhs, rhs) => write!(f, "({bin_op} {lhs} {rhs})"),
             Expr::UnaryOp(unary_op, expr) => write!(f, "({unary_op} {expr})"),
-            Expr::Assign(ident, expr) => write!(f, "(= {ident} {expr})"),
+            Expr::Assign { name, expr, .. } => write!(f, "(= {name} {expr})"),
             Expr::LogicOp(op, lhs, rhs) => write!(f, "({op} ({lhs}) ({rhs})"),
             Expr::Call(Func { callee, args }) => {
                 write!(f, "(call ({callee}) (")?;
@@ -498,8 +507,12 @@ impl<'a> Parser<'a> {
         let expr = self.parse_logic_or()?;
         if self.parse_if_eq(TokenType::Equal).is_some() {
             let rhs = self.parse_assignment()?;
-            if let Expr::Literal(Literal::Identifier(name)) = expr {
-                Ok(Expr::Assign(name, Box::new(rhs)))
+            if let Expr::Literal(Literal::Identifier { name, id }) = expr {
+                Ok(Expr::Assign {
+                    name,
+                    expr: Box::new(rhs),
+                    id,
+                })
             } else {
                 Err(Error::InvalidAssignment {
                     expr: expr.to_string(),

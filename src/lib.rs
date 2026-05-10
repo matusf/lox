@@ -3,6 +3,7 @@ use thiserror::Error;
 
 pub mod interpreter;
 pub mod parser;
+pub mod resolver;
 pub mod tokenizer;
 
 #[derive(Debug, Error)]
@@ -15,4 +16,6 @@ pub enum LoxError {
     ParserError(#[from] parser::Error),
     #[error("Runtime error")]
     RuntimeError(#[from] interpreter::Error),
+    #[error("Resolver error")]
+    ResolverError(#[from] resolver::Error),
 }
