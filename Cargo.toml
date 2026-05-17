@@ -6,3 +6,11 @@ edition = "2024"
 [dependencies]
 clap = { version = "4.6.1", features = ["derive"] }
 thiserror = "2"
+
+[features]
+test-harness = []
+
+[[bin]]
+name = "codecrafters-shim"
+path = "src/bin/codecrafters_shim.rs"
+required-features = ["test-harness"]
