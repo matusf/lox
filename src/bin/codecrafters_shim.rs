@@ -128,7 +128,6 @@ fn main() -> Result<(), LoxError> {
                 Ok(locals) => locals,
             };
 
-            eprintln!("{:?}", &locals);
             let interpreter = Interpreter::new(locals);
             let globals = Environment::with_globals();
             match interpreter.execute(program.iter(), Rc::new(globals)) {

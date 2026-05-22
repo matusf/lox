@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter, ops::ControlFlow};
 
-use crate::parser::{Expr, Func, Literal, Statement};
+use crate::parser::{Expr, Func, FuncDecl, Literal, Statement};
 use thiserror::Error;
 
 #[derive(Debug, PartialEq)]
@@ -21,9 +21,10 @@ pub enum Error {
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
-enum FunctionType {
+enum CallableType {
     None,
     Func,
+    Method,
 }
 
 #[derive(Debug, Default)]
@@ -37,14 +38,14 @@ impl<'a> Resolver<'a> {
         mut self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
     ) -> Result<HashMap<usize, usize>, Error> {
-        self.resolve(statements, FunctionType::None)?;
+        self.resolve(statements, CallableType::None)?;
         Ok(self.locals)
     }
 
     fn resolve(
         &mut self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
-        current_function: FunctionType,
+        current_function: CallableType,
     ) -> Result<(), Error> {
         for statement in statements {
             match statement {
@@ -75,23 +76,21 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(condition)?;
                     self.resolve(iter::once(body.as_ref()), current_function)?;
                 }
-                Statement::Func { name, args, body } => {
-                    self.declare_var(name)?;
-                    self.define_var(name);
-
-                    self.scopes.push(HashMap::new());
-                    for arg in args {
-                        self.declare_var(arg)?;
-                        self.define_var(arg);
-                    }
-                    self.resolve(body.as_ref().iter(), FunctionType::Func)?;
-                    self.scopes.pop();
+                Statement::FuncDecl(func_decl) => {
+                    self.resolve_func_decl(func_decl, CallableType::Func)?
                 }
                 Statement::Return(expr) => {
-                    if current_function != FunctionType::Func {
+                    if !matches!(current_function, CallableType::Func | CallableType::Method) {
                         return Err(Error::ReturnOutsideOfFunction);
                     }
                     self.resolve_expr(expr)?;
+                }
+                Statement::ClassDecl { name, methods } => {
+                    self.declare_var(name)?;
+                    self.define_var(name);
+                    methods.iter().try_for_each(|func_decl| {
+                        self.resolve_func_decl(func_decl, CallableType::Method)
+                    })?;
                 }
             }
         }
@@ -135,8 +134,33 @@ impl<'a> Resolver<'a> {
                     self.resolve_expr(arg)?;
                 }
             }
+            Expr::Get { expr, .. } => {
+                self.resolve_expr(expr)?;
+            }
+            Expr::Set { expr, value, .. } => {
+                self.resolve_expr(expr)?;
+                self.resolve_expr(value)?;
+            }
         };
 
+        Ok(())
+    }
+
+    fn resolve_func_decl(
+        &mut self,
+        FuncDecl { name, args, body }: &'a FuncDecl<'a>,
+        callable_type: CallableType,
+    ) -> Result<(), Error> {
+        self.declare_var(name)?;
+        self.define_var(name);
+
+        self.scopes.push(HashMap::new());
+        for arg in args {
+            self.declare_var(arg)?;
+            self.define_var(arg);
+        }
+        self.resolve(body.as_ref().iter(), callable_type)?;
+        self.scopes.pop();
         Ok(())
     }
 

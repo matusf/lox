@@ -185,6 +185,15 @@ pub enum Expr<'a> {
     },
     LogicOp(LogicOp, Box<Expr<'a>>, Box<Expr<'a>>),
     Call(Func<'a>),
+    Get {
+        expr: Box<Expr<'a>>,
+        name: &'a str,
+    },
+    Set {
+        expr: Box<Expr<'a>>,
+        name: &'a str,
+        value: Box<Expr<'a>>,
+    },
 }
 
 impl Display for Expr<'_> {
@@ -203,7 +212,32 @@ impl Display for Expr<'_> {
                 }
                 write!(f, ")")
             }
+            Expr::Get { expr, name } => write!(f, "(. {expr} {name})"),
+            Expr::Set { expr, name, value } => write!(f, "(. {expr} {name} {value})"),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct FuncDecl<'a> {
+    pub name: &'a str,
+    pub args: Box<[&'a str]>,
+    pub body: Box<[Statement<'a>]>,
+}
+
+impl Display for FuncDecl<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let FuncDecl { name, args, body } = self;
+
+        write!(f, "(func {name} (")?;
+        for arg in args.iter() {
+            write!(f, " {arg}")?
+        }
+        write!(f, ")")?;
+        for statement in body {
+            write!(f, " {statement}")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -215,10 +249,10 @@ pub enum Statement<'a> {
     Block(Vec<Statement<'a>>),
     IfElse(Expr<'a>, Box<Statement<'a>>, Option<Box<Statement<'a>>>),
     While(Expr<'a>, Box<Statement<'a>>),
-    Func {
+    FuncDecl(FuncDecl<'a>),
+    ClassDecl {
         name: &'a str,
-        args: Box<[&'a str]>,
-        body: Box<[Statement<'a>]>,
+        methods: Vec<FuncDecl<'a>>,
     },
     Return(Expr<'a>),
 }
@@ -240,18 +274,15 @@ impl Display for Statement<'_> {
             Statement::IfElse(expr, yes, Some(no)) => write!(f, "(if {expr} {yes} {no})"),
             Statement::IfElse(expr, yes, None) => write!(f, "(if {expr} {yes})"),
             Statement::While(expr, statement) => write!(f, "(while {expr} {statement})"),
-            Statement::Func { name, args, body } => {
-                write!(f, "(func {name} (")?;
-                for arg in args.iter() {
-                    write!(f, " {arg}")?
-                }
-                write!(f, ")")?;
-                for statement in body {
-                    write!(f, " {statement}")?;
+            Statement::FuncDecl(func_decl) => write!(f, "{func_decl}"),
+            Statement::Return(expr) => write!(f, "(return {expr})"),
+            Statement::ClassDecl { name, methods } => {
+                write!(f, "(class {name} ")?;
+                for method in methods {
+                    write!(f, "{method}")?;
                 }
                 write!(f, ")")
             }
-            Statement::Return(expr) => write!(f, "(return {expr})"),
         }
     }
 }
@@ -284,17 +315,34 @@ impl<'a> Parser<'a> {
         self.source[..token.offset].matches('\n').count()
     }
 
-    // declaration → funDecl | varDecl | statement ;
+    // declaration → classDecl | funDecl | varDecl | statement ;
     fn parse_declaration(&mut self) -> Result<Statement<'a>, Error> {
         // TODO: Sync the parser here?
 
-        if self.peek_eq(TokenType::Fun) {
+        if self.peek_eq(TokenType::Class) {
+            self.parse_class_declaration()
+        } else if self.peek_eq(TokenType::Fun) {
             self.parse_function_declaration()
         } else if self.peek_eq(TokenType::Var) {
             self.parse_var_declaration()
         } else {
             self.parse_statement()
         }
+    }
+
+    // classDecl → "class" IDENTIFIER "{" function* "}" ;
+    fn parse_class_declaration(&mut self) -> Result<Statement<'a>, Error> {
+        self.expect(TokenType::Class)?;
+        let name = self.expect(TokenType::Identifier)?.lexeme;
+        self.expect(TokenType::LeftBrace)?;
+
+        let mut methods = Vec::new();
+        while self.peek_eq(TokenType::Identifier) {
+            methods.push(self.parse_function_inner()?);
+        }
+
+        self.expect(TokenType::RightBrace)?;
+        Ok(Statement::ClassDecl { name, methods })
     }
 
     // funDecl → "fun" function ;
@@ -305,6 +353,11 @@ impl<'a> Parser<'a> {
 
     // function → IDENTIFIER "(" parameters? ")" block ;
     fn parse_function(&mut self) -> Result<Statement<'a>, Error> {
+        let func_decl = self.parse_function_inner()?;
+        Ok(Statement::FuncDecl(func_decl))
+    }
+
+    fn parse_function_inner(&mut self) -> Result<FuncDecl<'a>, Error> {
         let name = self.expect(TokenType::Identifier)?.lexeme;
 
         self.expect(TokenType::LeftParen)?;
@@ -318,7 +371,7 @@ impl<'a> Parser<'a> {
 
         let body = self.parse_block_to_vec()?;
 
-        Ok(Statement::Func {
+        Ok(FuncDecl {
             name,
             args: args.into_boxed_slice(),
             body: body.into_boxed_slice(),
@@ -502,7 +555,7 @@ impl<'a> Parser<'a> {
         self.parse_assignment()
     }
 
-    // assignment → IDENTIFIER "=" assignment | logic_or ;
+    // assignment → ( call "." )? IDENTIFIER "=" assignment | logic_or ;
     fn parse_assignment(&mut self) -> Result<Expr<'a>, Error> {
         let expr = self.parse_logic_or()?;
         if self.parse_if_eq(TokenType::Equal).is_some() {
@@ -512,6 +565,12 @@ impl<'a> Parser<'a> {
                     name,
                     expr: Box::new(rhs),
                     id,
+                })
+            } else if let Expr::Get { expr, name } = expr {
+                Ok(Expr::Set {
+                    expr,
+                    name,
+                    value: Box::new(rhs),
                 })
             } else {
                 Err(Error::InvalidAssignment {
@@ -604,26 +663,38 @@ impl<'a> Parser<'a> {
         self.parse_call()
     }
 
-    // call → primary ( "(" arguments? ")" )* ;
+    // call → primary ( "(" arguments? ")" | "." IDENTIFIER )* ;
     fn parse_call(&mut self) -> Result<Expr<'a>, Error> {
         let mut expr = self.parse_primary()?;
 
-        while self.parse_if_eq(TokenType::LeftParen).is_some() {
-            let mut args = Vec::new();
-            // Start parsing function call argument list
-            if !self.peek_eq(TokenType::RightParen) {
-                args = self.parse_arguments()?;
-            }
-            self.expect(TokenType::RightParen)?;
+        // ( "(" arguments? ")" | "." IDENTIFIER )* ;
+        while self.peek_match(|t| matches!(t, TokenType::LeftParen | TokenType::Dot)) {
+            // "(" arguments? ")"
+            while self.parse_if_eq(TokenType::LeftParen).is_some() {
+                let mut args = Vec::new();
+                // Start parsing function call argument list
+                if !self.peek_eq(TokenType::RightParen) {
+                    args = self.parse_arguments()?;
+                }
+                self.expect(TokenType::RightParen)?;
 
-            if args.len() >= 255 {
-                return Err(Error::TooManyArguments);
-            }
+                if args.len() >= 255 {
+                    return Err(Error::TooManyArguments);
+                }
 
-            expr = Expr::Call(Func {
-                callee: Box::new(expr),
-                args: args.into_boxed_slice(),
-            });
+                expr = Expr::Call(Func {
+                    callee: Box::new(expr),
+                    args: args.into_boxed_slice(),
+                });
+            }
+            // "." IDENTIFIER
+            while self.parse_if_eq(TokenType::Dot).is_some() {
+                let name = self.expect(TokenType::Identifier)?.lexeme;
+                expr = Expr::Get {
+                    expr: Box::new(expr),
+                    name,
+                }
+            }
         }
 
         Ok(expr)
@@ -668,6 +739,10 @@ impl<'a> Parser<'a> {
 
     fn peek_eq(&mut self, token_type: TokenType) -> bool {
         self.tokens.peek().is_some_and(|t| t.typ == token_type)
+    }
+
+    fn peek_match(&mut self, predicate: impl Fn(TokenType) -> bool) -> bool {
+        self.tokens.peek().is_some_and(|t| predicate(t.typ))
     }
 
     fn parse_if(&mut self, predicate: impl Fn(TokenType) -> bool) -> Option<Token<'a>> {

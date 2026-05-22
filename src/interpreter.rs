@@ -2,26 +2,53 @@ use std::{cell::RefCell, collections::HashMap, fmt::Display, iter, ops::ControlF
 
 use thiserror::Error;
 
-use crate::parser::{BinOp, Expr, ExprId, Func, Literal, LogicOp, Statement, UnaryOp};
+use crate::parser::{BinOp, Expr, ExprId, Func, FuncDecl, Literal, LogicOp, Statement, UnaryOp};
+
+#[derive(Debug)]
+pub struct Class<'a> {
+    name: &'a str,
+    methods: HashMap<&'a str, Function<'a>>,
+}
 
 #[derive(Debug, Clone)]
+pub struct Function<'a> {
+    name: &'a str,
+    args: &'a [&'a str],
+    body: &'a [Statement<'a>],
+    closure: Rc<Environment<'a>>,
+}
+
+impl<'a> FuncDecl<'a> {
+    fn into(&'a self, env: Rc<Environment<'a>>) -> Function<'a> {
+        Function {
+            name: self.name,
+            args: &self.args,
+            body: &self.body,
+            closure: env.clone(),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Value<'a> {
     Number(f64),
     String(Rc<str>),
-    Func {
-        name: &'a str,
-        args: &'a [&'a str],
-        body: &'a [Statement<'a>],
-        closure: Rc<Environment<'a>>,
-    },
+    Func(Function<'a>),
     NativeFunc {
         name: &'a str,
         arity: usize,
-        body: fn(&[Value<'a>]) -> Result<Value<'a>, Error>,
+        body: fn(&[ValueRef<'a>]) -> Result<ValueRef<'a>, Error>,
+    },
+    Class(Rc<Class<'a>>),
+    Instance {
+        class: Rc<Class<'a>>,
+        fields: RefCell<HashMap<&'a str, ValueRef<'a>>>,
     },
     Bool(bool),
     Nil,
 }
+
+type ValueRef<'a> = Rc<Value<'a>>;
 
 impl<'a> Display for Value<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -30,8 +57,10 @@ impl<'a> Display for Value<'a> {
             Value::String(s) => write!(f, "{s}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
-            Value::Func { name, .. } => write!(f, "<fn {name}>"),
+            Value::Func(Function { name, .. }) => write!(f, "<fn {name}>"),
             Value::NativeFunc { name, .. } => write!(f, "<fn {name}>"),
+            Value::Class(class) => write!(f, "{}", class.name),
+            Value::Instance { class, .. } => write!(f, "{} instance", class.name),
         }
     }
 }
@@ -77,11 +106,19 @@ pub enum Error {
         expected: usize,
         got: usize,
     },
+
+    #[error("Only instances have properties")]
+    NoProperties,
+
+    #[error("Property `{name}` not found")]
+    MissingProperty {
+        name: String,
+    },
 }
 
 #[derive(Debug, Default)]
 pub struct Environment<'a> {
-    values: RefCell<HashMap<&'a str, Value<'a>>>,
+    values: RefCell<HashMap<&'a str, Rc<Value<'a>>>>,
     enclosing: Option<Rc<Environment<'a>>>,
 }
 
@@ -93,11 +130,16 @@ impl<'a> Environment<'a> {
         })
     }
 
-    fn define(&self, name: &'a str, value: Value<'a>) {
+    fn define(&self, name: &'a str, value: Rc<Value<'a>>) {
         self.values.borrow_mut().insert(name, value);
     }
 
-    fn assign(&self, name: &'a str, value: Value<'a>, level: Option<usize>) -> Result<(), Error> {
+    fn assign(
+        &self,
+        name: &'a str,
+        value: Rc<Value<'a>>,
+        level: Option<usize>,
+    ) -> Result<(), Error> {
         let previous = match (level, self.enclosing.clone()) {
             // Write to glabals and current is globals
             (None, None) => self.values.borrow_mut().insert(name, value),
@@ -126,7 +168,7 @@ impl<'a> Environment<'a> {
         Ok(())
     }
 
-    fn get(&self, name: &str, level: Option<usize>) -> Result<Value<'a>, Error> {
+    fn get(&self, name: &str, level: Option<usize>) -> Result<Rc<Value<'a>>, Error> {
         let value = match (level, self.enclosing.clone()) {
             (None, None) => self.values.borrow().get(name).cloned(),
             (None, Some(mut env)) => {
@@ -135,13 +177,9 @@ impl<'a> Environment<'a> {
                 }
                 env.values.borrow().get(name).cloned()
             }
-            (Some(0), _) => {
-                eprintln!("{name}");
-                self.values.borrow().get(name).cloned()
-            }
+            (Some(0), _) => self.values.borrow().get(name).cloned(),
             (Some(_), None) => unreachable!(),
             (Some(level), Some(mut env)) => {
-                eprintln!("{name} {level}");
                 for _ in 0..(level - 1) {
                     match &env.enclosing {
                         Some(e) => env = e.clone(),
@@ -163,15 +201,15 @@ impl<'a> Environment<'a> {
         let name = "clock";
         env.define(
             name,
-            Value::NativeFunc {
+            Rc::new(Value::NativeFunc {
                 name,
                 arity: 0,
                 body: |_| {
                     Ok(std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
-                        .map(|t| Value::Number(t.as_secs_f64()))?)
+                        .map(|t| Rc::new(Value::Number(t.as_secs_f64())))?)
                 },
-            },
+            }),
         );
         env
     }
@@ -200,7 +238,7 @@ impl Interpreter {
         &self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
         env: Rc<Environment<'a>>,
-    ) -> Result<ControlFlow<Value<'a>>, Error> {
+    ) -> Result<ControlFlow<Rc<Value<'a>>>, Error> {
         for statement in statements {
             let env = env.clone();
             match statement {
@@ -210,7 +248,7 @@ impl Interpreter {
                 Statement::Print(expr) => {
                     println!("{}", self.eval(expr, env)?);
                 }
-                Statement::VarDecl(name, None) => env.define(name, Value::Nil),
+                Statement::VarDecl(name, None) => env.define(name, Rc::new(Value::Nil)),
                 Statement::VarDecl(name, Some(expr)) => {
                     let value = self.eval(expr, env.clone())?;
                     env.define(name, value);
@@ -244,34 +282,43 @@ impl Interpreter {
                         };
                     }
                 }
-                Statement::Func { name, args, body } => {
-                    let func = Value::Func {
-                        name,
-                        args,
-                        body,
-                        closure: env.clone(),
-                    };
-                    env.define(name, func);
+                Statement::FuncDecl(f) => {
+                    let func = Value::Func(f.into(env.clone()));
+                    env.define(f.name, Rc::new(func));
                 }
                 Statement::Return(expr) => {
                     let value = self.eval(expr, env)?;
                     return Ok(ControlFlow::Break(value));
+                }
+                Statement::ClassDecl { name, methods } => {
+                    // Two step definition to allow referencing class from the methods
+                    env.define(name, Rc::new(Value::Nil));
+                    let methods: HashMap<&str, Function<'_>> = methods
+                        .iter()
+                        .map(|f| (f.name, f.into(env.clone())))
+                        .collect();
+
+                    let class = Value::Class(Rc::new(Class { name, methods }));
+                    env.assign(name, Rc::new(class), Some(0))?;
                 }
             };
         }
         Ok(ControlFlow::Continue(()))
     }
 
-    pub fn eval<'a>(&self, expr: &Expr<'a>, env: Rc<Environment<'a>>) -> Result<Value<'a>, Error> {
+    pub fn eval<'a>(
+        &self,
+        expr: &Expr<'a>,
+        env: Rc<Environment<'a>>,
+    ) -> Result<Rc<Value<'a>>, Error> {
         let value = match expr {
             Expr::Literal(literal) => match literal {
-                Literal::Bool(b) => Value::Bool(*b),
-                Literal::Nil => Value::Nil,
-                Literal::Number(n) => Value::Number(*n),
-                Literal::String(s) => Value::String(Rc::from(s.trim_matches('"'))),
+                Literal::Bool(b) => Rc::new(Value::Bool(*b)),
+                Literal::Nil => Rc::new(Value::Nil),
+                Literal::Number(n) => Rc::new(Value::Number(*n)),
+                Literal::String(s) => Rc::new(Value::String(Rc::from(s.trim_matches('"')))),
                 Literal::Identifier { name, id } => env.get(name, self.locals.get(id).copied())?,
             },
-
             Expr::Group(expr) => self.eval(expr, env)?,
             Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(bin_op, lhs, rhs, env)?,
             Expr::UnaryOp(unary_op, expr) => self.eval_unary_op(unary_op, expr, env)?,
@@ -301,17 +348,17 @@ impl Interpreter {
             Expr::Call(Func { callee, args }) => {
                 let callee = self.eval(callee, env.clone())?;
 
-                let args: Result<Vec<Value<'_>>, _> =
+                let args: Result<Vec<Rc<Value<'_>>>, _> =
                     args.iter().map(|arg| self.eval(arg, env.clone())).collect();
                 let args = args?;
 
-                match callee {
-                    Value::Func {
+                match callee.as_ref() {
+                    Value::Func(Function {
                         name,
                         args: arg_names,
                         body,
                         closure,
-                    } => {
+                    }) => {
                         if args.len() != arg_names.len() {
                             return Err(Error::ArityMismatch {
                                 name: name.to_string(),
@@ -320,30 +367,63 @@ impl Interpreter {
                             });
                         }
 
-                        let env = Environment::from_enclosing(closure);
+                        let env = Environment::from_enclosing(closure.clone());
                         arg_names
                             .iter()
                             .zip(args)
                             .for_each(|(name, arg)| env.define(name, arg));
 
                         match self.execute(body.iter(), env)? {
-                            ControlFlow::Continue(()) => Value::Nil,
+                            ControlFlow::Continue(()) => Rc::new(Value::Nil),
                             ControlFlow::Break(value) => value,
                         }
                     }
                     Value::NativeFunc { name, arity, body } => {
-                        if args.len() != arity {
+                        if args.len() != *arity {
                             return Err(Error::ArityMismatch {
                                 name: name.to_string(),
-                                expected: arity,
+                                expected: *arity,
                                 got: args.len(),
                             });
                         }
 
                         body(&args)?
                     }
+                    Value::Class(class) => Rc::new(Value::Instance {
+                        class: class.clone(),
+                        fields: Default::default(),
+                    }),
                     _ => Err(Error::ValueNotCallable)?,
                 }
+            }
+            Expr::Get { expr, name } => {
+                let value = self.eval(expr, env)?;
+                let Value::Instance { class, fields } = value.as_ref() else {
+                    return Err(Error::NoProperties);
+                };
+
+                fields
+                    .borrow()
+                    .get(name)
+                    .cloned()
+                    .or_else(|| {
+                        class
+                            .methods
+                            .get(name)
+                            .map(|f| Rc::new(Value::Func(f.clone())))
+                    })
+                    .ok_or_else(|| Error::MissingProperty {
+                        name: name.to_string(),
+                    })?
+            }
+            Expr::Set { expr, name, value } => {
+                let getter = self.eval(expr, env.clone())?;
+                let Value::Instance { class, fields } = getter.as_ref() else {
+                    return Err(Error::NoProperties);
+                };
+                let value = self.eval(value, env)?;
+                fields.borrow_mut().insert(*name, value.clone());
+                value
             }
         };
 
@@ -355,18 +435,21 @@ impl Interpreter {
         unary_op: &UnaryOp,
         expr: &Expr<'a>,
         env: Rc<Environment<'a>>,
-    ) -> Result<Value<'a>, Error> {
+    ) -> Result<Rc<Value<'a>>, Error> {
         let value = self.eval(expr, env)?;
-        match (&unary_op, &value) {
-            (UnaryOp::Negate, Value::Bool(b)) => Ok(Value::Bool(!b)),
-            (UnaryOp::Negate, Value::Nil) => Ok(Value::Bool(true)),
-            (UnaryOp::Negate, _) => Ok(Value::Bool(false)),
-            (UnaryOp::Minus, Value::Number(n)) => Ok(Value::Number(-n)),
-            (_, _) => Err(Error::InvalidUnaryOperation {
-                op: unary_op.to_string(),
-                value: value.to_string(),
-            }),
-        }
+        let value = match (&unary_op, value.as_ref()) {
+            (UnaryOp::Negate, Value::Bool(b)) => Value::Bool(!b),
+            (UnaryOp::Negate, Value::Nil) => Value::Bool(true),
+            (UnaryOp::Negate, _) => Value::Bool(false),
+            (UnaryOp::Minus, Value::Number(n)) => Value::Number(-n),
+            (_, _) => {
+                return Err(Error::InvalidUnaryOperation {
+                    op: unary_op.to_string(),
+                    value: value.to_string(),
+                });
+            }
+        };
+        Ok(Rc::new(value))
     }
 
     fn eval_bin_op<'a>(
@@ -375,44 +458,47 @@ impl Interpreter {
         lhs: &Expr<'a>,
         rhs: &Expr<'a>,
         env: Rc<Environment<'a>>,
-    ) -> Result<Value<'a>, Error> {
+    ) -> Result<Rc<Value<'a>>, Error> {
         use BinOp::{
             Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
         };
         let lhs = self.eval(lhs, env.clone())?;
         let rhs = self.eval(rhs, env)?;
-        match (bin_op, lhs, rhs) {
-            (BangEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs != rhs)),
-            (BangEqual, Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs != rhs)),
-            (BangEqual, Value::Bool(lhs), Value::Bool(rhs)) => Ok(Value::Bool(lhs != rhs)),
-            (BangEqual, Value::Nil, Value::Nil) => Ok(Value::Bool(false)),
-            (BangEqual, _, _) => Ok(Value::Bool(true)),
+        let value = match (bin_op, lhs.as_ref(), rhs.as_ref()) {
+            (BangEqual, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs != rhs),
+            (BangEqual, Value::String(lhs), Value::String(rhs)) => Value::Bool(lhs != rhs),
+            (BangEqual, Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs != rhs),
+            (BangEqual, Value::Nil, Value::Nil) => Value::Bool(false),
+            (BangEqual, _, _) => Value::Bool(true),
 
-            (EqualEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs == rhs)),
-            (EqualEqual, Value::String(lhs), Value::String(rhs)) => Ok(Value::Bool(lhs == rhs)),
-            (EqualEqual, Value::Bool(lhs), Value::Bool(rhs)) => Ok(Value::Bool(lhs == rhs)),
-            (EqualEqual, Value::Nil, Value::Nil) => Ok(Value::Bool(true)),
-            (EqualEqual, _, _) => Ok(Value::Bool(false)),
+            (EqualEqual, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs == rhs),
+            (EqualEqual, Value::String(lhs), Value::String(rhs)) => Value::Bool(lhs == rhs),
+            (EqualEqual, Value::Bool(lhs), Value::Bool(rhs)) => Value::Bool(lhs == rhs),
+            (EqualEqual, Value::Nil, Value::Nil) => Value::Bool(true),
+            (EqualEqual, _, _) => Value::Bool(false),
 
-            (Greater, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs > rhs)),
-            (GreaterEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs >= rhs)),
-            (Less, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs < rhs)),
-            (LessEqual, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Bool(lhs <= rhs)),
-            (Sub, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs - rhs)),
-            (Add, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs + rhs)),
+            (Greater, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs > rhs),
+            (GreaterEqual, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs >= rhs),
+            (Less, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs < rhs),
+            (LessEqual, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs <= rhs),
+            (Sub, Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs - rhs),
+            (Add, Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs + rhs),
             (Add, Value::String(lhs), Value::String(rhs)) => {
                 let mut s = String::with_capacity(lhs.len() + rhs.len());
-                s.push_str(&lhs);
-                s.push_str(&rhs);
-                Ok(Value::String(Rc::from(s)))
+                s.push_str(lhs);
+                s.push_str(rhs);
+                Value::String(Rc::from(s))
             }
-            (Mul, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs * rhs)),
-            (Div, Value::Number(lhs), Value::Number(rhs)) => Ok(Value::Number(lhs / rhs)),
-            (op, lhs, rhs) => Err(Error::InvalidBinaryOperation {
-                op: op.to_string(),
-                lhs: lhs.to_string(),
-                rhs: rhs.to_string(),
-            }),
-        }
+            (Mul, Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs * rhs),
+            (Div, Value::Number(lhs), Value::Number(rhs)) => Value::Number(lhs / rhs),
+            (op, lhs, rhs) => {
+                return Err(Error::InvalidBinaryOperation {
+                    op: op.to_string(),
+                    lhs: lhs.to_string(),
+                    rhs: rhs.to_string(),
+                });
+            }
+        };
+        Ok(Rc::new(value))
     }
 }

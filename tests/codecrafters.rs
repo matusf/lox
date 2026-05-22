@@ -37,27 +37,43 @@ fn run_case(json_path: &str) {
 fn test_tokenizer() {
     run_case("./tests/cases/tokenizer.json");
 }
+
 #[test]
 fn test_parser() {
     run_case("./tests/cases/parser.json");
 }
+
 #[test]
 fn test_eval() {
     run_case("./tests/cases/eval.json");
 }
+
 #[test]
 fn test_statements() {
     run_case("./tests/cases/statements.json");
 }
+
 #[test]
 fn test_control_flow() {
     run_case("./tests/cases/control_flow.json");
 }
+
 #[test]
 fn test_functions() {
     run_case("./tests/cases/functions.json");
 }
+
 #[test]
 fn test_resolving() {
     run_case("./tests/cases/resolving.json");
+}
+
+#[test]
+fn test_classes() {
+    run_case("./tests/cases/classes.json");
+}
+
+#[test]
+fn test_inheritance() {
+    run_case("./tests/cases/inheritance.json");
 }
