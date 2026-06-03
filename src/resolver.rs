@@ -18,6 +18,8 @@ pub enum Error {
     VariableRedeclarationInSameScope,
     #[error("Can't return from top-level code")]
     ReturnOutsideOfFunction,
+    #[error("Can't use `this` outside of a class")]
+    ThisOutsideOfClass,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -25,6 +27,12 @@ enum CallableType {
     None,
     Func,
     Method,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+enum ClassType {
+    None,
+    Class,
 }
 
 #[derive(Debug, Default)]
@@ -38,59 +46,66 @@ impl<'a> Resolver<'a> {
         mut self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
     ) -> Result<HashMap<usize, usize>, Error> {
-        self.resolve(statements, CallableType::None)?;
+        self.resolve(statements, CallableType::None, ClassType::None)?;
         Ok(self.locals)
     }
 
     fn resolve(
         &mut self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
-        current_function: CallableType,
+        callable_type: CallableType,
+        class_type: ClassType,
     ) -> Result<(), Error> {
         for statement in statements {
             match statement {
-                Statement::Expr(expr) => self.resolve_expr(expr)?,
-                Statement::Print(expr) => self.resolve_expr(expr)?,
+                Statement::Expr(expr) => self.resolve_expr(expr, class_type)?,
+                Statement::Print(expr) => self.resolve_expr(expr, class_type)?,
                 Statement::VarDecl(name, expr) => {
                     self.declare_var(name)?;
 
                     if let Some(expr) = expr {
-                        self.resolve_expr(expr)?
+                        self.resolve_expr(expr, class_type)?
                     }
 
                     self.define_var(name);
                 }
                 Statement::Block(statements) => {
                     self.scopes.push(HashMap::new());
-                    self.resolve(statements.iter(), current_function)?;
+                    self.resolve(statements.iter(), callable_type, class_type)?;
                     self.scopes.pop();
                 }
                 Statement::IfElse(condition, yes, no) => {
-                    self.resolve_expr(condition)?;
-                    self.resolve(iter::once(yes.as_ref()), current_function)?;
+                    self.resolve_expr(condition, class_type)?;
+                    self.resolve(iter::once(yes.as_ref()), callable_type, class_type)?;
                     if let Some(no) = no {
-                        self.resolve(iter::once(no.as_ref()), current_function)?;
+                        self.resolve(iter::once(no.as_ref()), callable_type, class_type)?;
                     }
                 }
                 Statement::While(condition, body) => {
-                    self.resolve_expr(condition)?;
-                    self.resolve(iter::once(body.as_ref()), current_function)?;
+                    self.resolve_expr(condition, class_type)?;
+                    self.resolve(iter::once(body.as_ref()), callable_type, class_type)?;
                 }
                 Statement::FuncDecl(func_decl) => {
-                    self.resolve_func_decl(func_decl, CallableType::Func)?
+                    self.resolve_func_decl(func_decl, CallableType::Func, class_type)?
                 }
                 Statement::Return(expr) => {
-                    if !matches!(current_function, CallableType::Func | CallableType::Method) {
+                    if !matches!(callable_type, CallableType::Func | CallableType::Method) {
                         return Err(Error::ReturnOutsideOfFunction);
                     }
-                    self.resolve_expr(expr)?;
+                    self.resolve_expr(expr, class_type)?;
                 }
                 Statement::ClassDecl { name, methods } => {
                     self.declare_var(name)?;
                     self.define_var(name);
+
+                    self.scopes.push(HashMap::new());
+                    self.define_var("this");
+
                     methods.iter().try_for_each(|func_decl| {
-                        self.resolve_func_decl(func_decl, CallableType::Method)
+                        self.resolve_func_decl(func_decl, CallableType::Method, ClassType::Class)
                     })?;
+
+                    self.scopes.pop();
                 }
             }
         }
@@ -98,7 +113,7 @@ impl<'a> Resolver<'a> {
         Ok(())
     }
 
-    fn resolve_expr(&mut self, expr: &'a Expr<'a>) -> Result<(), Error> {
+    fn resolve_expr(&mut self, expr: &'a Expr<'a>, class_type: ClassType) -> Result<(), Error> {
         match expr {
             Expr::Literal(literal) => {
                 if let Literal::Identifier { name, id } = *literal {
@@ -111,35 +126,41 @@ impl<'a> Resolver<'a> {
                 }
             }
             Expr::Group(expr) => {
-                self.resolve_expr(expr)?;
+                self.resolve_expr(expr, class_type)?;
             }
             Expr::BinOp(_, lhs, rhs) => {
-                self.resolve_expr(lhs)?;
-                self.resolve_expr(rhs)?;
+                self.resolve_expr(lhs, class_type)?;
+                self.resolve_expr(rhs, class_type)?;
             }
             Expr::UnaryOp(_, expr) => {
-                self.resolve_expr(expr)?;
+                self.resolve_expr(expr, class_type)?;
             }
             Expr::Assign { name, expr, id } => {
-                self.resolve_expr(expr)?;
+                self.resolve_expr(expr, class_type)?;
                 self.resolve_local(name, *id);
             }
             Expr::LogicOp(_, lhs, rhs) => {
-                self.resolve_expr(lhs)?;
-                self.resolve_expr(rhs)?;
+                self.resolve_expr(lhs, class_type)?;
+                self.resolve_expr(rhs, class_type)?;
             }
             Expr::Call(Func { callee, args }) => {
-                self.resolve_expr(callee)?;
+                self.resolve_expr(callee, class_type)?;
                 for arg in args {
-                    self.resolve_expr(arg)?;
+                    self.resolve_expr(arg, class_type)?;
                 }
             }
             Expr::Get { expr, .. } => {
-                self.resolve_expr(expr)?;
+                self.resolve_expr(expr, class_type)?;
             }
             Expr::Set { expr, value, .. } => {
-                self.resolve_expr(expr)?;
-                self.resolve_expr(value)?;
+                self.resolve_expr(expr, class_type)?;
+                self.resolve_expr(value, class_type)?;
+            }
+            Expr::This { id } => {
+                if class_type != ClassType::Class {
+                    return Err(Error::ThisOutsideOfClass);
+                }
+                self.resolve_local("this", *id)
             }
         };
 
@@ -150,6 +171,7 @@ impl<'a> Resolver<'a> {
         &mut self,
         FuncDecl { name, args, body }: &'a FuncDecl<'a>,
         callable_type: CallableType,
+        class_type: ClassType,
     ) -> Result<(), Error> {
         self.declare_var(name)?;
         self.define_var(name);
@@ -159,7 +181,7 @@ impl<'a> Resolver<'a> {
             self.declare_var(arg)?;
             self.define_var(arg);
         }
-        self.resolve(body.as_ref().iter(), callable_type)?;
+        self.resolve(body.as_ref().iter(), callable_type, class_type)?;
         self.scopes.pop();
         Ok(())
     }

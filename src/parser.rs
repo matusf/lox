@@ -194,6 +194,9 @@ pub enum Expr<'a> {
         name: &'a str,
         value: Box<Expr<'a>>,
     },
+    This {
+        id: usize,
+    },
 }
 
 impl Display for Expr<'_> {
@@ -214,6 +217,7 @@ impl Display for Expr<'_> {
             }
             Expr::Get { expr, name } => write!(f, "(. {expr} {name})"),
             Expr::Set { expr, name, value } => write!(f, "(. {expr} {name} {value})"),
+            Expr::This { .. } => write!(f, "this"),
         }
     }
 }
@@ -714,7 +718,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    // primary → "true" | "false" | "nil" | NUMBER | STRING | "(" expression ")" | IDENTIFIER ;
+    // primary → "true" | "false" | "nil" | NUMBER | STRING | "(" expression ")" | IDENTIFIER | "this" ;
     fn parse_primary(&mut self) -> Result<Expr<'a>, Error> {
         let token = self.tokens.next().ok_or(Error::UnexpectedEof)?;
 
@@ -730,6 +734,7 @@ impl<'a> Parser<'a> {
             | TokenType::Nil
             | TokenType::False
             | TokenType::True => Ok(Expr::Literal(token.into())),
+            TokenType::This => Ok(Expr::This { id: token.offset }),
             _ => Err(Error::UnexpectedToken {
                 line: self.compute_token_line(&token),
                 lexeme: token.lexeme.to_string(),

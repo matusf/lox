@@ -18,6 +18,15 @@ pub struct Function<'a> {
     closure: Rc<Environment<'a>>,
 }
 
+impl<'a> Function<'a> {
+    fn bind(mut self, name: &'a str, value: Rc<Value<'a>>) -> Self {
+        let env = Environment::from_enclosing(self.closure);
+        env.define(name, value);
+        self.closure = env;
+        self
+    }
+}
+
 impl<'a> FuncDecl<'a> {
     fn into(&'a self, env: Rc<Environment<'a>>) -> Function<'a> {
         Function {
@@ -410,7 +419,7 @@ impl Interpreter {
                         class
                             .methods
                             .get(name)
-                            .map(|f| Rc::new(Value::Func(f.clone())))
+                            .map(|f| Rc::new(Value::Func(f.clone().bind("this", value.clone()))))
                     })
                     .ok_or_else(|| Error::MissingProperty {
                         name: name.to_string(),
@@ -425,6 +434,7 @@ impl Interpreter {
                 fields.borrow_mut().insert(*name, value.clone());
                 value
             }
+            Expr::This { id } => env.get("this", self.locals.get(id).copied())?,
         };
 
         Ok(value)
