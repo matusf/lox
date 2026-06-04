@@ -16,24 +16,57 @@ pub struct Function<'a> {
     args: &'a [&'a str],
     body: &'a [Statement<'a>],
     closure: Rc<Environment<'a>>,
+    is_initializer: bool,
 }
 
 impl<'a> Function<'a> {
-    fn bind(mut self, name: &'a str, value: Rc<Value<'a>>) -> Self {
+    fn bind(mut self, value: Rc<Value<'a>>) -> Self {
         let env = Environment::from_enclosing(self.closure);
-        env.define(name, value);
+        env.define("this", value);
         self.closure = env;
         self
+    }
+
+    fn call(
+        &self,
+        args: Vec<Rc<Value<'a>>>,
+        interpreter: &Interpreter,
+    ) -> Result<Rc<Value<'a>>, Error> {
+        if args.len() != self.args.len() {
+            return Err(Error::ArityMismatch {
+                name: self.name.to_string(),
+                expected: self.args.len(),
+                got: args.len(),
+            });
+        }
+
+        let env = Environment::from_enclosing(self.closure.clone());
+        self.args
+            .iter()
+            .zip(args)
+            .for_each(|(name, arg)| env.define(name, arg));
+
+        let value = match interpreter.execute(self.body.iter(), env)? {
+            ControlFlow::Continue(()) => Rc::new(Value::Nil),
+            ControlFlow::Break(value) => value,
+        };
+
+        if self.is_initializer {
+            self.closure.get("this", Some(0))
+        } else {
+            Ok(value)
+        }
     }
 }
 
 impl<'a> FuncDecl<'a> {
-    fn into(&'a self, env: Rc<Environment<'a>>) -> Function<'a> {
+    fn into(&'a self, env: Rc<Environment<'a>>, is_initializer: bool) -> Function<'a> {
         Function {
             name: self.name,
             args: &self.args,
             body: &self.body,
             closure: env.clone(),
+            is_initializer,
         }
     }
 }
@@ -292,7 +325,7 @@ impl Interpreter {
                     }
                 }
                 Statement::FuncDecl(f) => {
-                    let func = Value::Func(f.into(env.clone()));
+                    let func = Value::Func(f.into(env.clone(), false));
                     env.define(f.name, Rc::new(func));
                 }
                 Statement::Return(expr) => {
@@ -304,7 +337,7 @@ impl Interpreter {
                     env.define(name, Rc::new(Value::Nil));
                     let methods: HashMap<&str, Function<'_>> = methods
                         .iter()
-                        .map(|f| (f.name, f.into(env.clone())))
+                        .map(|f| (f.name, f.into(env.clone(), f.name == "init")))
                         .collect();
 
                     let class = Value::Class(Rc::new(Class { name, methods }));
@@ -362,31 +395,7 @@ impl Interpreter {
                 let args = args?;
 
                 match callee.as_ref() {
-                    Value::Func(Function {
-                        name,
-                        args: arg_names,
-                        body,
-                        closure,
-                    }) => {
-                        if args.len() != arg_names.len() {
-                            return Err(Error::ArityMismatch {
-                                name: name.to_string(),
-                                expected: arg_names.len(),
-                                got: args.len(),
-                            });
-                        }
-
-                        let env = Environment::from_enclosing(closure.clone());
-                        arg_names
-                            .iter()
-                            .zip(args)
-                            .for_each(|(name, arg)| env.define(name, arg));
-
-                        match self.execute(body.iter(), env)? {
-                            ControlFlow::Continue(()) => Rc::new(Value::Nil),
-                            ControlFlow::Break(value) => value,
-                        }
-                    }
+                    Value::Func(function) => function.call(args, self)?,
                     Value::NativeFunc { name, arity, body } => {
                         if args.len() != *arity {
                             return Err(Error::ArityMismatch {
@@ -398,10 +407,20 @@ impl Interpreter {
 
                         body(&args)?
                     }
-                    Value::Class(class) => Rc::new(Value::Instance {
-                        class: class.clone(),
-                        fields: Default::default(),
-                    }),
+                    Value::Class(class) => {
+                        let instance = Rc::new(Value::Instance {
+                            class: class.clone(),
+                            fields: Default::default(),
+                        });
+
+                        // Call initializer
+                        class
+                            .methods
+                            .get("init")
+                            .map(|f| f.clone().bind(instance.clone()).call(args, self));
+
+                        instance
+                    }
                     _ => Err(Error::ValueNotCallable)?,
                 }
             }
@@ -419,7 +438,7 @@ impl Interpreter {
                         class
                             .methods
                             .get(name)
-                            .map(|f| Rc::new(Value::Func(f.clone().bind("this", value.clone()))))
+                            .map(|f| Rc::new(Value::Func(f.clone().bind(value.clone()))))
                     })
                     .ok_or_else(|| Error::MissingProperty {
                         name: name.to_string(),
@@ -427,7 +446,7 @@ impl Interpreter {
             }
             Expr::Set { expr, name, value } => {
                 let getter = self.eval(expr, env.clone())?;
-                let Value::Instance { class, fields } = getter.as_ref() else {
+                let Value::Instance { fields, .. } = getter.as_ref() else {
                     return Err(Error::NoProperties);
                 };
                 let value = self.eval(value, env)?;

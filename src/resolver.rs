@@ -20,12 +20,15 @@ pub enum Error {
     ReturnOutsideOfFunction,
     #[error("Can't use `this` outside of a class")]
     ThisOutsideOfClass,
+    #[error("Can't return a value from an initializer.")]
+    ReturnInInitializer,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
 enum CallableType {
     None,
     Func,
+    Initializer,
     Method,
 }
 
@@ -89,8 +92,17 @@ impl<'a> Resolver<'a> {
                     self.resolve_func_decl(func_decl, CallableType::Func, class_type)?
                 }
                 Statement::Return(expr) => {
-                    if !matches!(callable_type, CallableType::Func | CallableType::Method) {
+                    if !matches!(
+                        callable_type,
+                        CallableType::Func | CallableType::Method | CallableType::Initializer
+                    ) {
                         return Err(Error::ReturnOutsideOfFunction);
+                    }
+
+                    if callable_type == CallableType::Initializer
+                        && !matches!(expr, Expr::Literal(Literal::Nil))
+                    {
+                        return Err(Error::ReturnInInitializer);
                     }
                     self.resolve_expr(expr, class_type)?;
                 }
@@ -102,7 +114,12 @@ impl<'a> Resolver<'a> {
                     self.define_var("this");
 
                     methods.iter().try_for_each(|func_decl| {
-                        self.resolve_func_decl(func_decl, CallableType::Method, ClassType::Class)
+                        let callable_type = if func_decl.name == "init" {
+                            CallableType::Initializer
+                        } else {
+                            CallableType::Method
+                        };
+                        self.resolve_func_decl(func_decl, callable_type, ClassType::Class)
                     })?;
 
                     self.scopes.pop();
