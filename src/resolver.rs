@@ -1,6 +1,6 @@
 use std::{collections::HashMap, iter, ops::ControlFlow};
 
-use crate::parser::{Expr, Func, FuncDecl, Literal, Statement};
+use crate::parser::{Expr, Func, FuncDecl, Identifier, Literal, Statement};
 use thiserror::Error;
 
 #[derive(Debug, PartialEq)]
@@ -22,6 +22,8 @@ pub enum Error {
     ThisOutsideOfClass,
     #[error("Can't return a value from an initializer.")]
     ReturnInInitializer,
+    #[error("A class can't inherit from itself")]
+    InheritanceFromSelf,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -106,9 +108,21 @@ impl<'a> Resolver<'a> {
                     }
                     self.resolve_expr(expr, class_type)?;
                 }
-                Statement::ClassDecl { name, methods } => {
+                Statement::ClassDecl {
+                    name,
+                    methods,
+                    super_class,
+                } => {
                     self.declare_var(name)?;
                     self.define_var(name);
+
+                    if let Some(super_class) = super_class {
+                        if super_class.name == *name {
+                            return Err(Error::InheritanceFromSelf);
+                        }
+
+                        self.resolve_identifier(super_class)?;
+                    }
 
                     self.scopes.push(HashMap::new());
                     self.define_var("this");
@@ -133,13 +147,8 @@ impl<'a> Resolver<'a> {
     fn resolve_expr(&mut self, expr: &'a Expr<'a>, class_type: ClassType) -> Result<(), Error> {
         match expr {
             Expr::Literal(literal) => {
-                if let Literal::Identifier { name, id } = *literal {
-                    if let Some(scope) = self.scopes.last()
-                        && scope.get(name) == Some(&VariableState::Declared)
-                    {
-                        return Err(Error::ReadingLocalVariableInOwnInitializer);
-                    }
-                    self.resolve_local(name, id);
+                if let Literal::Identifier(identifier) = literal {
+                    self.resolve_identifier(identifier)?;
                 }
             }
             Expr::Group(expr) => {
@@ -181,6 +190,16 @@ impl<'a> Resolver<'a> {
             }
         };
 
+        Ok(())
+    }
+
+    fn resolve_identifier(&mut self, Identifier { name, id }: &'a Identifier) -> Result<(), Error> {
+        if let Some(scope) = self.scopes.last()
+            && scope.get(name) == Some(&VariableState::Declared)
+        {
+            return Err(Error::ReadingLocalVariableInOwnInitializer);
+        }
+        self.resolve_local(name, *id);
         Ok(())
     }
 

@@ -2,12 +2,24 @@ use std::{cell::RefCell, collections::HashMap, fmt::Display, iter, ops::ControlF
 
 use thiserror::Error;
 
-use crate::parser::{BinOp, Expr, ExprId, Func, FuncDecl, Literal, LogicOp, Statement, UnaryOp};
+use crate::parser::{
+    BinOp, Expr, ExprId, Func, FuncDecl, Identifier, Literal, LogicOp, Statement, UnaryOp,
+};
 
 #[derive(Debug)]
 pub struct Class<'a> {
     name: &'a str,
+    super_class: Option<Rc<Class<'a>>>,
     methods: HashMap<&'a str, Function<'a>>,
+}
+
+impl<'a> Class<'a> {
+    fn find_method(&self, name: &str) -> Option<Function<'a>> {
+        self.methods
+            .get(name)
+            .cloned()
+            .or_else(|| self.super_class.as_ref().and_then(|c| c.find_method(name)))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -154,6 +166,10 @@ pub enum Error {
 
     #[error("Property `{name}` not found")]
     MissingProperty {
+        name: String,
+    },
+    #[error("Superclass `{name} is not of type class")]
+    SuperClassNotAClass {
         name: String,
     },
 }
@@ -332,7 +348,26 @@ impl Interpreter {
                     let value = self.eval(expr, env)?;
                     return Ok(ControlFlow::Break(value));
                 }
-                Statement::ClassDecl { name, methods } => {
+                Statement::ClassDecl {
+                    name,
+                    methods,
+                    super_class,
+                } => {
+                    // Resolve super class
+                    let super_class = if let Some(identifier) = super_class {
+                        let value =
+                            env.get(identifier.name, self.locals.get(&identifier.id).copied())?;
+
+                        let Value::Class(super_class) = value.as_ref() else {
+                            return Err(Error::SuperClassNotAClass {
+                                name: identifier.name.to_string(),
+                            });
+                        };
+                        Some(super_class.clone())
+                    } else {
+                        None
+                    };
+
                     // Two step definition to allow referencing class from the methods
                     env.define(name, Rc::new(Value::Nil));
                     let methods: HashMap<&str, Function<'_>> = methods
@@ -340,7 +375,11 @@ impl Interpreter {
                         .map(|f| (f.name, f.into(env.clone(), f.name == "init")))
                         .collect();
 
-                    let class = Value::Class(Rc::new(Class { name, methods }));
+                    let class = Value::Class(Rc::new(Class {
+                        name,
+                        super_class,
+                        methods,
+                    }));
                     env.assign(name, Rc::new(class), Some(0))?;
                 }
             };
@@ -359,7 +398,9 @@ impl Interpreter {
                 Literal::Nil => Rc::new(Value::Nil),
                 Literal::Number(n) => Rc::new(Value::Number(*n)),
                 Literal::String(s) => Rc::new(Value::String(Rc::from(s.trim_matches('"')))),
-                Literal::Identifier { name, id } => env.get(name, self.locals.get(id).copied())?,
+                Literal::Identifier(Identifier { name, id }) => {
+                    env.get(name, self.locals.get(id).copied())?
+                }
             },
             Expr::Group(expr) => self.eval(expr, env)?,
             Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(bin_op, lhs, rhs, env)?,
@@ -415,8 +456,7 @@ impl Interpreter {
 
                         // Call initializer
                         class
-                            .methods
-                            .get("init")
+                            .find_method("init")
                             .map(|f| f.clone().bind(instance.clone()).call(args, self));
 
                         instance
@@ -425,8 +465,8 @@ impl Interpreter {
                 }
             }
             Expr::Get { expr, name } => {
-                let value = self.eval(expr, env)?;
-                let Value::Instance { class, fields } = value.as_ref() else {
+                let this = self.eval(expr, env)?;
+                let Value::Instance { class, fields } = this.as_ref() else {
                     return Err(Error::NoProperties);
                 };
 
@@ -436,9 +476,8 @@ impl Interpreter {
                     .cloned()
                     .or_else(|| {
                         class
-                            .methods
-                            .get(name)
-                            .map(|f| Rc::new(Value::Func(f.clone().bind(value.clone()))))
+                            .find_method(name)
+                            .map(|f| Rc::new(Value::Func(f.clone().bind(this.clone()))))
                     })
                     .ok_or_else(|| Error::MissingProperty {
                         name: name.to_string(),

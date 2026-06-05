@@ -19,12 +19,33 @@ pub enum Error {
 pub type ExprId = usize;
 
 #[derive(Debug)]
+pub struct Identifier<'a> {
+    pub name: &'a str,
+    pub id: ExprId,
+}
+
+impl Display for Identifier<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)
+    }
+}
+
+impl<'a> From<Token<'a>> for Identifier<'a> {
+    fn from(token: Token<'a>) -> Self {
+        Self {
+            name: token.lexeme,
+            id: token.offset,
+        }
+    }
+}
+
+#[derive(Debug)]
 pub enum Literal<'a> {
     Bool(bool),
     Nil,
     Number(f64),
     String(&'a str),
-    Identifier { name: &'a str, id: ExprId },
+    Identifier(Identifier<'a>),
 }
 
 impl Display for Literal<'_> {
@@ -40,7 +61,7 @@ impl Display for Literal<'_> {
                 }
             }
             Literal::String(s) => write!(f, "{}", s.trim_matches('"')),
-            Literal::Identifier { name, .. } => write!(f, "{name}"),
+            Literal::Identifier(identifier) => write!(f, "{identifier}"),
         }
     }
 }
@@ -56,10 +77,7 @@ impl<'a> From<Token<'a>> for Literal<'a> {
                 Self::Number(num)
             }
             TokenType::String => Self::String(token.lexeme),
-            TokenType::Identifier => Self::Identifier {
-                name: token.lexeme,
-                id: token.offset,
-            },
+            TokenType::Identifier => Self::Identifier(token.into()),
             _ => unreachable!(),
         }
     }
@@ -109,8 +127,6 @@ impl<'a> From<Token<'a>> for BinOp {
             TokenType::GreaterEqual => Self::GreaterEqual,
             TokenType::Less => Self::Less,
             TokenType::LessEqual => Self::LessEqual,
-            // TokenType::And => todo!(),
-            // TokenType::Or => todo!(),
             _ => unreachable!(),
         }
     }
@@ -256,6 +272,7 @@ pub enum Statement<'a> {
     FuncDecl(FuncDecl<'a>),
     ClassDecl {
         name: &'a str,
+        super_class: Option<Identifier<'a>>,
         methods: Vec<FuncDecl<'a>>,
     },
     Return(Expr<'a>),
@@ -280,8 +297,15 @@ impl Display for Statement<'_> {
             Statement::While(expr, statement) => write!(f, "(while {expr} {statement})"),
             Statement::FuncDecl(func_decl) => write!(f, "{func_decl}"),
             Statement::Return(expr) => write!(f, "(return {expr})"),
-            Statement::ClassDecl { name, methods } => {
+            Statement::ClassDecl {
+                name,
+                methods,
+                super_class,
+            } => {
                 write!(f, "(class {name} ")?;
+                if let Some(super_class) = super_class {
+                    write!(f, "{super_class}")?
+                }
                 for method in methods {
                     write!(f, "{method}")?;
                 }
@@ -335,9 +359,17 @@ impl<'a> Parser<'a> {
     }
 
     // classDecl → "class" IDENTIFIER "{" function* "}" ;
+    // classDecl → "class" IDENTIFIER ( "<" IDENTIFIER )? "{" function* "}" ;
     fn parse_class_declaration(&mut self) -> Result<Statement<'a>, Error> {
         self.expect(TokenType::Class)?;
         let name = self.expect(TokenType::Identifier)?.lexeme;
+
+        let super_class = if self.parse_if_eq(TokenType::Less).is_some() {
+            Some(self.expect(TokenType::Identifier)?.into())
+        } else {
+            None
+        };
+
         self.expect(TokenType::LeftBrace)?;
 
         let mut methods = Vec::new();
@@ -346,7 +378,11 @@ impl<'a> Parser<'a> {
         }
 
         self.expect(TokenType::RightBrace)?;
-        Ok(Statement::ClassDecl { name, methods })
+        Ok(Statement::ClassDecl {
+            name,
+            super_class,
+            methods,
+        })
     }
 
     // funDecl → "fun" function ;
@@ -564,7 +600,7 @@ impl<'a> Parser<'a> {
         let expr = self.parse_logic_or()?;
         if self.parse_if_eq(TokenType::Equal).is_some() {
             let rhs = self.parse_assignment()?;
-            if let Expr::Literal(Literal::Identifier { name, id }) = expr {
+            if let Expr::Literal(Literal::Identifier(Identifier { name, id })) = expr {
                 Ok(Expr::Assign {
                     name,
                     expr: Box::new(rhs),
