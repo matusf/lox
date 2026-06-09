@@ -24,6 +24,10 @@ pub enum Error {
     ReturnInInitializer,
     #[error("A class can't inherit from itself")]
     InheritanceFromSelf,
+    #[error("Can't use 'super' outside of a class")]
+    SuperOutsideOfClass,
+    #[error("Can't use 'super' in a class with no superclass")]
+    SuperInBaseClass,
 }
 
 #[derive(Debug, PartialEq, Clone, Copy)]
@@ -38,6 +42,7 @@ enum CallableType {
 enum ClassType {
     None,
     Class,
+    SubClass,
 }
 
 #[derive(Debug, Default)]
@@ -116,13 +121,18 @@ impl<'a> Resolver<'a> {
                     self.declare_var(name)?;
                     self.define_var(name);
 
-                    if let Some(super_class) = super_class {
+                    let class_type = if let Some(super_class) = super_class {
                         if super_class.name == *name {
                             return Err(Error::InheritanceFromSelf);
                         }
 
                         self.resolve_identifier(super_class)?;
-                    }
+                        self.scopes.push(HashMap::new());
+                        self.define_var("super");
+                        ClassType::SubClass
+                    } else {
+                        ClassType::Class
+                    };
 
                     self.scopes.push(HashMap::new());
                     self.define_var("this");
@@ -133,10 +143,14 @@ impl<'a> Resolver<'a> {
                         } else {
                             CallableType::Method
                         };
-                        self.resolve_func_decl(func_decl, callable_type, ClassType::Class)
+                        self.resolve_func_decl(func_decl, callable_type, class_type)
                     })?;
-
+                    // Pop `this` scope
                     self.scopes.pop();
+                    if matches!(class_type, ClassType::SubClass) {
+                        // Pop `super` scope
+                        self.scopes.pop();
+                    }
                 }
             }
         }
@@ -183,10 +197,18 @@ impl<'a> Resolver<'a> {
                 self.resolve_expr(value, class_type)?;
             }
             Expr::This { id } => {
-                if class_type != ClassType::Class {
+                if !matches!(class_type, ClassType::Class | ClassType::SubClass) {
                     return Err(Error::ThisOutsideOfClass);
                 }
                 self.resolve_local("this", *id)
+            }
+            Expr::Super(Identifier { id, .. }) => {
+                if matches!(class_type, ClassType::None) {
+                    return Err(Error::SuperOutsideOfClass);
+                } else if matches!(class_type, ClassType::Class) {
+                    return Err(Error::SuperInBaseClass);
+                }
+                self.resolve_local("super", *id)
             }
         };
 

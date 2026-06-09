@@ -213,6 +213,7 @@ pub enum Expr<'a> {
     This {
         id: usize,
     },
+    Super(Identifier<'a>),
 }
 
 impl Display for Expr<'_> {
@@ -234,6 +235,7 @@ impl Display for Expr<'_> {
             Expr::Get { expr, name } => write!(f, "(. {expr} {name})"),
             Expr::Set { expr, name, value } => write!(f, "(. {expr} {name} {value})"),
             Expr::This { .. } => write!(f, "this"),
+            Expr::Super(identifier) => write!(f, "(super {identifier})"),
         }
     }
 }
@@ -754,7 +756,7 @@ impl<'a> Parser<'a> {
         Ok(args)
     }
 
-    // primary → "true" | "false" | "nil" | NUMBER | STRING | "(" expression ")" | IDENTIFIER | "this" ;
+    // primary → "true" | "false" | "nil" | "this" | NUMBER | STRING | IDENTIFIER | "(" expression ")" | "super" "." IDENTIFIER ;
     fn parse_primary(&mut self) -> Result<Expr<'a>, Error> {
         let token = self.tokens.next().ok_or(Error::UnexpectedEof)?;
 
@@ -770,6 +772,10 @@ impl<'a> Parser<'a> {
             | TokenType::Nil
             | TokenType::False
             | TokenType::True => Ok(Expr::Literal(token.into())),
+            TokenType::Super => {
+                self.expect(TokenType::Dot)?;
+                Ok(Expr::Super(self.expect(TokenType::Identifier)?.into()))
+            }
             TokenType::This => Ok(Expr::This { id: token.offset }),
             _ => Err(Error::UnexpectedToken {
                 line: self.compute_token_line(&token),

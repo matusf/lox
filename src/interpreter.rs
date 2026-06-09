@@ -168,7 +168,7 @@ pub enum Error {
     MissingProperty {
         name: String,
     },
-    #[error("Superclass `{name} is not of type class")]
+    #[error("Superclass `{name}` is not of type class")]
     SuperClassNotAClass {
         name: String,
     },
@@ -353,26 +353,30 @@ impl Interpreter {
                     methods,
                     super_class,
                 } => {
-                    // Resolve super class
-                    let super_class = if let Some(identifier) = super_class {
-                        let value =
-                            env.get(identifier.name, self.locals.get(&identifier.id).copied())?;
-
-                        let Value::Class(super_class) = value.as_ref() else {
-                            return Err(Error::SuperClassNotAClass {
-                                name: identifier.name.to_string(),
-                            });
-                        };
-                        Some(super_class.clone())
-                    } else {
-                        None
-                    };
-
                     // Two step definition to allow referencing class from the methods
                     env.define(name, Rc::new(Value::Nil));
+
+                    let (super_class, class_env) = match super_class {
+                        Some(identifier) => {
+                            let value =
+                                env.get(identifier.name, self.locals.get(&identifier.id).copied())?;
+
+                            let Value::Class(super_class) = value.as_ref() else {
+                                return Err(Error::SuperClassNotAClass {
+                                    name: identifier.name.to_string(),
+                                });
+                            };
+                            let class_env = Environment::from_enclosing(env.clone());
+                            class_env.define("super", value.clone());
+
+                            (Some(super_class.clone()), class_env)
+                        }
+                        None => (None, env.clone()),
+                    };
+
                     let methods: HashMap<&str, Function<'_>> = methods
                         .iter()
-                        .map(|f| (f.name, f.into(env.clone(), f.name == "init")))
+                        .map(|f| (f.name, f.into(class_env.clone(), f.name == "init")))
                         .collect();
 
                     let class = Value::Class(Rc::new(Class {
@@ -493,6 +497,23 @@ impl Interpreter {
                 value
             }
             Expr::This { id } => env.get("this", self.locals.get(id).copied())?,
+            Expr::Super(Identifier { name, id }) => {
+                let super_class = env.get("super", self.locals.get(id).cloned())?;
+                let this = env.get("this", self.locals.get(id).map(|i| i - 1))?;
+
+                let Value::Class(class) = super_class.as_ref() else {
+                    return Err(Error::SuperClassNotAClass {
+                        name: super_class.to_string(),
+                    });
+                };
+
+                class
+                    .find_method(name)
+                    .map(|f| Rc::new(Value::Func(f.clone().bind(this.clone()))))
+                    .ok_or_else(|| Error::MissingProperty {
+                        name: name.to_string(),
+                    })?
+            }
         };
 
         Ok(value)
