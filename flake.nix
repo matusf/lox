@@ -47,9 +47,7 @@
         checkFlags = ["--" "--test-threads=1"];
       };
     in {
-      packages = {
-        tester = tester;
-      };
+      packages.default = lox;
       devShells.default = pkgs.mkShell {
         packages = [tester lox];
       };
