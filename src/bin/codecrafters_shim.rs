@@ -130,7 +130,7 @@ fn main() -> Result<(), LoxError> {
 
             let interpreter = Interpreter::new(locals);
             let globals = Environment::with_globals();
-            match interpreter.execute(program.iter(), Rc::new(globals)) {
+            match interpreter.execute(program.iter(), &Rc::new(globals)) {
                 Ok(ControlFlow::Break(_)) => unreachable!(),
                 Ok(_) => (),
                 Err(error) => {

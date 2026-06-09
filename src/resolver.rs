@@ -74,7 +74,7 @@ impl<'a> Resolver<'a> {
                     self.declare_var(name)?;
 
                     if let Some(expr) = expr {
-                        self.resolve_expr(expr, class_type)?
+                        self.resolve_expr(expr, class_type)?;
                     }
 
                     self.define_var(name);
@@ -96,7 +96,7 @@ impl<'a> Resolver<'a> {
                     self.resolve(iter::once(body.as_ref()), callable_type, class_type)?;
                 }
                 Statement::FuncDecl(func_decl) => {
-                    self.resolve_func_decl(func_decl, CallableType::Func, class_type)?
+                    self.resolve_func_decl(func_decl, CallableType::Func, class_type)?;
                 }
                 Statement::Return(expr) => {
                     if !matches!(
@@ -200,7 +200,7 @@ impl<'a> Resolver<'a> {
                 if !matches!(class_type, ClassType::Class | ClassType::SubClass) {
                     return Err(Error::ThisOutsideOfClass);
                 }
-                self.resolve_local("this", *id)
+                self.resolve_local("this", *id);
             }
             Expr::Super(Identifier { id, .. }) => {
                 if matches!(class_type, ClassType::None) {
@@ -208,9 +208,9 @@ impl<'a> Resolver<'a> {
                 } else if matches!(class_type, ClassType::Class) {
                     return Err(Error::SuperInBaseClass);
                 }
-                self.resolve_local("super", *id)
+                self.resolve_local("super", *id);
             }
-        };
+        }
 
         Ok(())
     }
@@ -249,8 +249,8 @@ impl<'a> Resolver<'a> {
             // If the variable is already declared, return error
             if scope.insert(name, VariableState::Declared).is_some() {
                 return Err(Error::VariableRedeclarationInSameScope);
-            };
-        };
+            }
+        }
 
         Ok(())
     }

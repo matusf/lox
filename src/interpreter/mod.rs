@@ -63,7 +63,7 @@ impl<'a> Function<'a> {
             .zip(args)
             .for_each(|(name, arg)| env.define(name, arg));
 
-        let value = match interpreter.execute(self.body.iter(), env)? {
+        let value = match interpreter.execute(self.body.iter(), &env)? {
             ControlFlow::Continue(()) => Rc::new(Value::Nil),
             ControlFlow::Break(value) => value,
         };
@@ -79,7 +79,7 @@ impl<'a> Function<'a> {
 }
 
 impl<'a> FuncDecl<'a> {
-    fn into(&'a self, env: Rc<Environment<'a>>, is_initializer: bool) -> Function<'a> {
+    fn into(&'a self, env: &Rc<Environment<'a>>, is_initializer: bool) -> Function<'a> {
         Function {
             name: self.name,
             args: &self.args,
@@ -111,23 +111,24 @@ pub enum Value<'a> {
 
 type ValueRef<'a> = Rc<Value<'a>>;
 
-impl<'a> Display for Value<'a> {
+impl Display for Value<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::Number(n) => write!(f, "{n}"),
             Value::String(s) => write!(f, "{s}"),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Nil => write!(f, "nil"),
-            Value::Func(Function { name, .. }) => write!(f, "<fn {name}>"),
-            Value::NativeFunc { name, .. } => write!(f, "<fn {name}>"),
+            Value::Func(Function { name, .. }) | Value::NativeFunc { name, .. } => {
+                write!(f, "<fn {name}>")
+            }
             Value::Class(class) => write!(f, "{}", class.name),
             Value::Instance { class, .. } => write!(f, "{} instance", class.name),
         }
     }
 }
 
-impl<'a> Value<'a> {
-    fn is_truthy(&self) -> bool {
+impl Value<'_> {
+    const fn is_truthy(&self) -> bool {
         !matches!(self, Value::Nil | Value::Bool(false))
     }
 }
@@ -183,7 +184,7 @@ pub enum Error {
 
 impl Error {
     fn undefined_variable(name: &str) -> Self {
-        Error::UndefinedVariable {
+        Self::UndefinedVariable {
             name: name.to_string(),
         }
     }
@@ -194,14 +195,15 @@ pub struct Interpreter {
 }
 
 impl Interpreter {
-    pub fn new(locals: HashMap<ExprId, usize>) -> Self {
+    #[must_use]
+    pub const fn new(locals: HashMap<ExprId, usize>) -> Self {
         Self { locals }
     }
 
     pub fn execute<'a>(
         &self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
-        env: Rc<Environment<'a>>,
+        env: &Rc<Environment<'a>>,
     ) -> Result<ControlFlow<Rc<Value<'a>>>, Error> {
         for statement in statements {
             let env = env.clone();
@@ -219,35 +221,35 @@ impl Interpreter {
                 }
                 Statement::Block(statements) => {
                     let value =
-                        self.execute(statements.iter(), Environment::from_enclosing(env))?;
+                        self.execute(statements.iter(), &Environment::from_enclosing(env))?;
                     if let Some(return_value) = value.break_value() {
                         return Ok(ControlFlow::Break(return_value));
-                    };
+                    }
                 }
                 Statement::IfElse(condition, yes, no) => {
                     let condition = self.eval(condition, env.clone())?;
                     if condition.is_truthy() {
-                        let value = self.execute(iter::once(yes.as_ref()), env)?;
+                        let value = self.execute(iter::once(yes.as_ref()), &env)?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
-                        };
+                        }
                     } else if let Some(no) = no {
-                        let value = self.execute(iter::once(no.as_ref()), env)?;
+                        let value = self.execute(iter::once(no.as_ref()), &env)?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
-                        };
+                        }
                     }
                 }
                 Statement::While(condition, statement) => {
                     while self.eval(condition, env.clone())?.is_truthy() {
-                        let value = self.execute(iter::once(statement.as_ref()), env.clone())?;
+                        let value = self.execute(iter::once(statement.as_ref()), &env)?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
-                        };
+                        }
                     }
                 }
                 Statement::FuncDecl(f) => {
-                    let func = Value::Func(f.into(env.clone(), false));
+                    let func = Value::Func(f.into(&env, false));
                     env.define(f.name, Rc::new(func));
                 }
                 Statement::Return(expr) => {
@@ -283,7 +285,7 @@ impl Interpreter {
 
                     let methods: HashMap<&str, Function<'_>> = methods
                         .iter()
-                        .map(|f| (f.name, f.into(class_env.clone(), f.name == "init")))
+                        .map(|f| (f.name, f.into(&class_env, f.name == "init")))
                         .collect();
 
                     let class = Value::Class(Rc::new(Class {
@@ -294,7 +296,7 @@ impl Interpreter {
                     env.assign(name, Rc::new(class), Some(0))
                         .ok_or_else(|| Error::undefined_variable(name))?;
                 }
-            };
+            }
         }
         Ok(ControlFlow::Continue(()))
     }
@@ -315,8 +317,8 @@ impl Interpreter {
                     .ok_or_else(|| Error::undefined_variable(name))?,
             },
             Expr::Group(expr) => self.eval(expr, env)?,
-            Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(bin_op, lhs, rhs, env)?,
-            Expr::UnaryOp(unary_op, expr) => self.eval_unary_op(unary_op, expr, env)?,
+            Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(*bin_op, lhs, rhs, env)?,
+            Expr::UnaryOp(unary_op, expr) => self.eval_unary_op(*unary_op, expr, env)?,
             Expr::Assign { name, expr, id } => {
                 let value = self.eval(expr, env.clone())?;
                 env.assign(name, value.clone(), self.locals.get(id).copied())
@@ -364,7 +366,7 @@ impl Interpreter {
                     Value::Class(class) => {
                         let instance = Rc::new(Value::Instance {
                             class: class.clone(),
-                            fields: Default::default(),
+                            fields: RefCell::default(),
                         });
 
                         // Call initializer
@@ -410,7 +412,7 @@ impl Interpreter {
                 .ok_or_else(|| Error::undefined_variable("this"))?,
             Expr::Super(Identifier { name, id }) => {
                 let super_class = env
-                    .get("super", self.locals.get(id).cloned())
+                    .get("super", self.locals.get(id).copied())
                     .ok_or_else(|| Error::undefined_variable("super"))?;
                 let this = env
                     .get("this", self.locals.get(id).map(|i| i - 1))
@@ -436,7 +438,7 @@ impl Interpreter {
 
     fn eval_unary_op<'a>(
         &self,
-        unary_op: &UnaryOp,
+        unary_op: UnaryOp,
         expr: &Expr<'a>,
         env: Rc<Environment<'a>>,
     ) -> Result<Rc<Value<'a>>, Error> {
@@ -458,7 +460,7 @@ impl Interpreter {
 
     fn eval_bin_op<'a>(
         &self,
-        bin_op: &BinOp,
+        bin_op: BinOp,
         lhs: &Expr<'a>,
         rhs: &Expr<'a>,
         env: Rc<Environment<'a>>,

@@ -83,7 +83,7 @@ impl<'a> From<Token<'a>> for Literal<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub enum BinOp {
     BangEqual,
     EqualEqual,
@@ -176,8 +176,8 @@ impl<'a> From<Token<'a>> for LogicOp {
 impl Display for LogicOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LogicOp::And => write!(f, "and"),
-            LogicOp::Or => write!(f, "or"),
+            Self::And => write!(f, "and"),
+            Self::Or => write!(f, "or"),
         }
     }
 }
@@ -252,8 +252,8 @@ impl Display for FuncDecl<'_> {
         let FuncDecl { name, args, body } = self;
 
         write!(f, "(func {name} (")?;
-        for arg in args.iter() {
-            write!(f, " {arg}")?
+        for arg in args {
+            write!(f, " {arg}")?;
         }
         write!(f, ")")?;
         for statement in body {
@@ -306,7 +306,7 @@ impl Display for Statement<'_> {
             } => {
                 write!(f, "(class {name} ")?;
                 if let Some(super_class) = super_class {
-                    write!(f, "{super_class}")?
+                    write!(f, "{super_class}")?;
                 }
                 for method in methods {
                     write!(f, "{method}")?;
@@ -483,13 +483,13 @@ impl<'a> Parser<'a> {
             self.expect(TokenType::Semicolon)?;
         } else {
             block.push(self.parse_expr_statement()?);
-        };
+        }
 
         // <condition> ;
-        let condition = if !self.peek_eq(TokenType::Semicolon) {
-            self.parse_expression()?
-        } else {
+        let condition = if self.peek_eq(TokenType::Semicolon) {
             Expr::Literal(Literal::Bool(true))
+        } else {
+            self.parse_expression()?
         };
         self.expect(TokenType::Semicolon)?;
 
@@ -555,10 +555,10 @@ impl<'a> Parser<'a> {
     // returnStmt → "return" expression? ";" ;
     fn parse_return_statement(&mut self) -> Result<Statement<'a>, Error> {
         self.expect(TokenType::Return)?;
-        let expr = if !self.peek_eq(TokenType::Semicolon) {
-            self.parse_expression()?
-        } else {
+        let expr = if self.peek_eq(TokenType::Semicolon) {
             Expr::Literal(Literal::Nil)
+        } else {
+            self.parse_expression()?
         };
         self.expect(TokenType::Semicolon)?;
         Ok(Statement::Return(expr))

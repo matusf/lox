@@ -76,7 +76,8 @@ impl<'a> Environment<'a> {
         }
     }
 
-    pub fn with_globals() -> Environment<'a> {
+    #[must_use]
+    pub fn with_globals() -> Self {
         let env = Self::default();
 
         let name = "clock";
@@ -101,7 +102,7 @@ impl Display for Environment<'_> {
         write!(f, "{:?}", self.values)?;
         if let Some(env) = &self.enclosing {
             write!(f, "{env}")?;
-        };
+        }
         Ok(())
     }
 }

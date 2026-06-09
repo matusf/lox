@@ -16,7 +16,7 @@ pub struct Token<'a> {
     pub offset: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenType {
     LeftParen,
     RightParen,
