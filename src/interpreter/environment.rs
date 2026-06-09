@@ -1,10 +1,10 @@
 use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
-use crate::interpreter::Value;
+use crate::interpreter::{Value, ValueRef};
 
 #[derive(Debug, Default)]
 pub struct Environment<'a> {
-    values: RefCell<HashMap<&'a str, Rc<Value<'a>>>>,
+    values: RefCell<HashMap<&'a str, ValueRef<'a>>>,
     enclosing: Option<Rc<Environment<'a>>>,
 }
 
@@ -16,14 +16,14 @@ impl<'a> Environment<'a> {
         })
     }
 
-    pub(crate) fn define(&self, name: &'a str, value: Rc<Value<'a>>) {
+    pub(crate) fn define(&self, name: &'a str, value: ValueRef<'a>) {
         self.values.borrow_mut().insert(name, value);
     }
 
     pub(crate) fn assign(
         &self,
         name: &'a str,
-        value: Rc<Value<'a>>,
+        value: ValueRef<'a>,
         level: Option<usize>,
     ) -> Option<()> {
         let previous = match (level, self.enclosing.clone()) {
@@ -53,7 +53,7 @@ impl<'a> Environment<'a> {
         previous.map(|_| ())
     }
 
-    pub(crate) fn get(&self, name: &str, level: Option<usize>) -> Option<Rc<Value<'a>>> {
+    pub(crate) fn get(&self, name: &str, level: Option<usize>) -> Option<ValueRef<'a>> {
         match (level, self.enclosing.clone()) {
             (None, None) => self.values.borrow().get(name).cloned(),
             (None, Some(mut env)) => {

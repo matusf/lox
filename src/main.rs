@@ -45,7 +45,7 @@ fn main() -> Result<(), LoxError> {
     let statements = report(statements, errors);
 
     let _ = Interpreter::new(Resolver::default().run(statements.iter())?)
-        .execute(statements.iter(), &Rc::new(Environment::with_globals()))?;
+        .execute(statements.iter(), Rc::new(Environment::with_globals()))?;
 
     Ok(())
 }

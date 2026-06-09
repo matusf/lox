@@ -37,7 +37,7 @@ pub struct Function<'a> {
 }
 
 impl<'a> Function<'a> {
-    fn bind(mut self, value: Rc<Value<'a>>) -> Self {
+    fn bind(mut self, value: ValueRef<'a>) -> Self {
         let env = Environment::from_enclosing(self.closure);
         env.define("this", value);
         self.closure = env;
@@ -46,9 +46,9 @@ impl<'a> Function<'a> {
 
     fn call(
         &self,
-        args: Vec<Rc<Value<'a>>>,
+        args: Vec<ValueRef<'a>>,
         interpreter: &Interpreter,
-    ) -> Result<Rc<Value<'a>>, Error> {
+    ) -> Result<ValueRef<'a>, Error> {
         if args.len() != self.args.len() {
             return Err(Error::ArityMismatch {
                 name: self.name.to_string(),
@@ -63,7 +63,7 @@ impl<'a> Function<'a> {
             .zip(args)
             .for_each(|(name, arg)| env.define(name, arg));
 
-        let value = match interpreter.execute(self.body.iter(), &env)? {
+        let value = match interpreter.execute(self.body.iter(), env)? {
             ControlFlow::Continue(()) => Rc::new(Value::Nil),
             ControlFlow::Break(value) => value,
         };
@@ -203,46 +203,45 @@ impl Interpreter {
     pub fn execute<'a>(
         &self,
         statements: impl Iterator<Item = &'a Statement<'a>>,
-        env: &Rc<Environment<'a>>,
-    ) -> Result<ControlFlow<Rc<Value<'a>>>, Error> {
+        env: Rc<Environment<'a>>,
+    ) -> Result<ControlFlow<ValueRef<'a>>, Error> {
         for statement in statements {
-            let env = env.clone();
             match statement {
                 Statement::Expr(expr) => {
-                    self.eval(expr, env)?;
+                    self.eval(expr, &env)?;
                 }
                 Statement::Print(expr) => {
-                    println!("{}", self.eval(expr, env)?);
+                    println!("{}", self.eval(expr, &env)?);
                 }
                 Statement::VarDecl(name, None) => env.define(name, Rc::new(Value::Nil)),
                 Statement::VarDecl(name, Some(expr)) => {
-                    let value = self.eval(expr, env.clone())?;
+                    let value = self.eval(expr, &env)?;
                     env.define(name, value);
                 }
                 Statement::Block(statements) => {
                     let value =
-                        self.execute(statements.iter(), &Environment::from_enclosing(env))?;
+                        self.execute(statements.iter(), Environment::from_enclosing(env.clone()))?;
                     if let Some(return_value) = value.break_value() {
                         return Ok(ControlFlow::Break(return_value));
                     }
                 }
                 Statement::IfElse(condition, yes, no) => {
-                    let condition = self.eval(condition, env.clone())?;
+                    let condition = self.eval(condition, &env)?;
                     if condition.is_truthy() {
-                        let value = self.execute(iter::once(yes.as_ref()), &env)?;
+                        let value = self.execute(iter::once(yes.as_ref()), env.clone())?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
                         }
                     } else if let Some(no) = no {
-                        let value = self.execute(iter::once(no.as_ref()), &env)?;
+                        let value = self.execute(iter::once(no.as_ref()), env.clone())?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
                         }
                     }
                 }
                 Statement::While(condition, statement) => {
-                    while self.eval(condition, env.clone())?.is_truthy() {
-                        let value = self.execute(iter::once(statement.as_ref()), &env)?;
+                    while self.eval(condition, &env)?.is_truthy() {
+                        let value = self.execute(iter::once(statement.as_ref()), env.clone())?;
                         if let Some(return_value) = value.break_value() {
                             return Ok(ControlFlow::Break(return_value));
                         }
@@ -253,7 +252,7 @@ impl Interpreter {
                     env.define(f.name, Rc::new(func));
                 }
                 Statement::Return(expr) => {
-                    let value = self.eval(expr, env)?;
+                    let value = self.eval(expr, &env)?;
                     return Ok(ControlFlow::Break(value));
                 }
                 Statement::ClassDecl {
@@ -301,11 +300,7 @@ impl Interpreter {
         Ok(ControlFlow::Continue(()))
     }
 
-    pub fn eval<'a>(
-        &self,
-        expr: &Expr<'a>,
-        env: Rc<Environment<'a>>,
-    ) -> Result<Rc<Value<'a>>, Error> {
+    pub fn eval<'a>(&self, expr: &Expr<'a>, env: &Environment<'a>) -> Result<ValueRef<'a>, Error> {
         let value = match expr {
             Expr::Literal(literal) => match literal {
                 Literal::Bool(b) => Rc::new(Value::Bool(*b)),
@@ -320,14 +315,14 @@ impl Interpreter {
             Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(*bin_op, lhs, rhs, env)?,
             Expr::UnaryOp(unary_op, expr) => self.eval_unary_op(*unary_op, expr, env)?,
             Expr::Assign { name, expr, id } => {
-                let value = self.eval(expr, env.clone())?;
+                let value = self.eval(expr, env)?;
                 env.assign(name, value.clone(), self.locals.get(id).copied())
                     .ok_or_else(|| Error::undefined_variable(name))?;
                 value
             }
             Expr::LogicOp(op, lhs, rhs) => match op {
                 LogicOp::And => {
-                    let lhs = self.eval(lhs, env.clone())?;
+                    let lhs = self.eval(lhs, env)?;
                     if lhs.is_truthy() {
                         self.eval(rhs, env)?
                     } else {
@@ -335,7 +330,7 @@ impl Interpreter {
                     }
                 }
                 LogicOp::Or => {
-                    let lhs = self.eval(lhs, env.clone())?;
+                    let lhs = self.eval(lhs, env)?;
                     if lhs.is_truthy() {
                         lhs
                     } else {
@@ -344,10 +339,10 @@ impl Interpreter {
                 }
             },
             Expr::Call(Func { callee, args }) => {
-                let callee = self.eval(callee, env.clone())?;
+                let callee = self.eval(callee, env)?;
 
                 let args: Result<Vec<Rc<Value<'_>>>, _> =
-                    args.iter().map(|arg| self.eval(arg, env.clone())).collect();
+                    args.iter().map(|arg| self.eval(arg, env)).collect();
                 let args = args?;
 
                 match callee.as_ref() {
@@ -399,7 +394,7 @@ impl Interpreter {
                     })?
             }
             Expr::Set { expr, name, value } => {
-                let getter = self.eval(expr, env.clone())?;
+                let getter = self.eval(expr, env)?;
                 let Value::Instance { fields, .. } = getter.as_ref() else {
                     return Err(Error::NoProperties);
                 };
@@ -440,8 +435,8 @@ impl Interpreter {
         &self,
         unary_op: UnaryOp,
         expr: &Expr<'a>,
-        env: Rc<Environment<'a>>,
-    ) -> Result<Rc<Value<'a>>, Error> {
+        env: &Environment<'a>,
+    ) -> Result<ValueRef<'a>, Error> {
         let value = self.eval(expr, env)?;
         let value = match (&unary_op, value.as_ref()) {
             (UnaryOp::Negate, Value::Bool(b)) => Value::Bool(!b),
@@ -463,12 +458,12 @@ impl Interpreter {
         bin_op: BinOp,
         lhs: &Expr<'a>,
         rhs: &Expr<'a>,
-        env: Rc<Environment<'a>>,
-    ) -> Result<Rc<Value<'a>>, Error> {
+        env: &Environment<'a>,
+    ) -> Result<ValueRef<'a>, Error> {
         use BinOp::{
             Add, BangEqual, Div, EqualEqual, Greater, GreaterEqual, Less, LessEqual, Mul, Sub,
         };
-        let lhs = self.eval(lhs, env.clone())?;
+        let lhs = self.eval(lhs, env)?;
         let rhs = self.eval(rhs, env)?;
         let value = match (bin_op, lhs.as_ref(), rhs.as_ref()) {
             (BangEqual, Value::Number(lhs), Value::Number(rhs)) => Value::Bool(lhs != rhs),

@@ -85,7 +85,7 @@ fn main() -> Result<(), LoxError> {
             let tokens: Result<Vec<Token<'_>>, _> = Tokenizer::new(&source).collect();
             let expr = parser::Parser::new(&source, tokens?).parse_expression()?;
             let interpreter = Interpreter::new(HashMap::new());
-            match interpreter.eval(&expr, Rc::new(Environment::default())) {
+            match interpreter.eval(&expr, &Environment::default()) {
                 Ok(value) => println!("{value}"),
                 Err(err) => {
                     eprintln!("{err}");
@@ -130,7 +130,7 @@ fn main() -> Result<(), LoxError> {
 
             let interpreter = Interpreter::new(locals);
             let globals = Environment::with_globals();
-            match interpreter.execute(program.iter(), &Rc::new(globals)) {
+            match interpreter.execute(program.iter(), Rc::new(globals)) {
                 Ok(ControlFlow::Break(_)) => unreachable!(),
                 Ok(_) => (),
                 Err(error) => {
