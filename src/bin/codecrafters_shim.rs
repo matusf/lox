@@ -7,7 +7,7 @@ use std::{fs, process};
 use clap::{Parser, Subcommand};
 use lox::{
     LoxError,
-    interpreter::{Environment, Interpreter},
+    interpreter::{Interpreter, environment::Environment},
     parser,
     resolver::Resolver,
     tokenizer::{Token, Tokenizer},
