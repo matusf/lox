@@ -94,7 +94,7 @@ impl Display for Token<'_> {
                 if num.trunc() == num {
                     write!(f, "NUMBER {lexeme} {num}.0")
                 } else {
-                    write!(f, "NUMBER {lexeme} {lexeme}",)
+                    write!(f, "NUMBER {lexeme} {num}",)
                 }
             }
             TokenType::And => write!(f, "AND {lexeme} null"),
