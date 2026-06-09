@@ -69,7 +69,9 @@ impl<'a> Function<'a> {
         };
 
         if self.is_initializer {
-            self.closure.get("this", Some(0))
+            self.closure
+                .get("this", Some(0))
+                .ok_or_else(|| Error::undefined_variable("this"))
         } else {
             Ok(value)
         }
@@ -179,6 +181,14 @@ pub enum Error {
     },
 }
 
+impl Error {
+    fn undefined_variable(name: &str) -> Self {
+        Error::UndefinedVariable {
+            name: name.to_string(),
+        }
+    }
+}
+
 pub struct Interpreter {
     locals: HashMap<ExprId, usize>,
 }
@@ -254,8 +264,9 @@ impl Interpreter {
 
                     let (super_class, class_env) = match super_class {
                         Some(identifier) => {
-                            let value =
-                                env.get(identifier.name, self.locals.get(&identifier.id).copied())?;
+                            let value = env
+                                .get(identifier.name, self.locals.get(&identifier.id).copied())
+                                .ok_or_else(|| Error::undefined_variable(identifier.name))?;
 
                             let Value::Class(super_class) = value.as_ref() else {
                                 return Err(Error::SuperClassNotAClass {
@@ -280,7 +291,8 @@ impl Interpreter {
                         super_class,
                         methods,
                     }));
-                    env.assign(name, Rc::new(class), Some(0))?;
+                    env.assign(name, Rc::new(class), Some(0))
+                        .ok_or_else(|| Error::undefined_variable(name))?;
                 }
             };
         }
@@ -298,16 +310,17 @@ impl Interpreter {
                 Literal::Nil => Rc::new(Value::Nil),
                 Literal::Number(n) => Rc::new(Value::Number(*n)),
                 Literal::String(s) => Rc::new(Value::String(Rc::from(s.trim_matches('"')))),
-                Literal::Identifier(Identifier { name, id }) => {
-                    env.get(name, self.locals.get(id).copied())?
-                }
+                Literal::Identifier(Identifier { name, id }) => env
+                    .get(name, self.locals.get(id).copied())
+                    .ok_or_else(|| Error::undefined_variable(name))?,
             },
             Expr::Group(expr) => self.eval(expr, env)?,
             Expr::BinOp(bin_op, lhs, rhs) => self.eval_bin_op(bin_op, lhs, rhs, env)?,
             Expr::UnaryOp(unary_op, expr) => self.eval_unary_op(unary_op, expr, env)?,
             Expr::Assign { name, expr, id } => {
                 let value = self.eval(expr, env.clone())?;
-                env.assign(name, value.clone(), self.locals.get(id).copied())?;
+                env.assign(name, value.clone(), self.locals.get(id).copied())
+                    .ok_or_else(|| Error::undefined_variable(name))?;
                 value
             }
             Expr::LogicOp(op, lhs, rhs) => match op {
@@ -392,10 +405,16 @@ impl Interpreter {
                 fields.borrow_mut().insert(*name, value.clone());
                 value
             }
-            Expr::This { id } => env.get("this", self.locals.get(id).copied())?,
+            Expr::This { id } => env
+                .get("this", self.locals.get(id).copied())
+                .ok_or_else(|| Error::undefined_variable("this"))?,
             Expr::Super(Identifier { name, id }) => {
-                let super_class = env.get("super", self.locals.get(id).cloned())?;
-                let this = env.get("this", self.locals.get(id).map(|i| i - 1))?;
+                let super_class = env
+                    .get("super", self.locals.get(id).cloned())
+                    .ok_or_else(|| Error::undefined_variable("super"))?;
+                let this = env
+                    .get("this", self.locals.get(id).map(|i| i - 1))
+                    .ok_or_else(|| Error::undefined_variable("this"))?;
 
                 let Value::Class(class) = super_class.as_ref() else {
                     return Err(Error::SuperClassNotAClass {

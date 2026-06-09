@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, fmt::Display, rc::Rc};
 
-use crate::interpreter::{Error, Value};
+use crate::interpreter::Value;
 
 #[derive(Debug, Default)]
 pub struct Environment<'a> {
@@ -25,7 +25,7 @@ impl<'a> Environment<'a> {
         name: &'a str,
         value: Rc<Value<'a>>,
         level: Option<usize>,
-    ) -> Result<(), Error> {
+    ) -> Option<()> {
         let previous = match (level, self.enclosing.clone()) {
             // Write to glabals and current is globals
             (None, None) => self.values.borrow_mut().insert(name, value),
@@ -50,12 +50,11 @@ impl<'a> Environment<'a> {
                 env.values.borrow_mut().insert(name, value)
             }
         };
-        assert!(previous.is_some());
-        Ok(())
+        previous.map(|_| ())
     }
 
-    pub(crate) fn get(&self, name: &str, level: Option<usize>) -> Result<Rc<Value<'a>>, Error> {
-        let value = match (level, self.enclosing.clone()) {
+    pub(crate) fn get(&self, name: &str, level: Option<usize>) -> Option<Rc<Value<'a>>> {
+        match (level, self.enclosing.clone()) {
             (None, None) => self.values.borrow().get(name).cloned(),
             (None, Some(mut env)) => {
                 while let Some(e) = &env.enclosing {
@@ -74,11 +73,7 @@ impl<'a> Environment<'a> {
                 }
                 env.values.borrow().get(name).cloned()
             }
-        };
-
-        value.ok_or_else(|| Error::UndefinedVariable {
-            name: name.to_string(),
-        })
+        }
     }
 
     pub fn with_globals() -> Environment<'a> {
